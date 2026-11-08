@@ -1,0 +1,30 @@
+# Builds the YakTube TV app and attaches it to a GitHub Release whenever android/ changes.
+name: TV app
+on:
+  push:
+    branches: [main]
+    paths: ["android/**", ".github/workflows/tv-apk.yml"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - name: Build and sign
+        env:
+          KS_PASS: ${{ secrets.TV_KS_PASS }}
+          KS_B64: ${{ secrets.TV_KEYSTORE }}
+          VERSION: ${{ github.run_number }}
+          YAK_URL: ${{ secrets.YAK_URL }}
+        run: |
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/key.p12"
+          KEYSTORE="$RUNNER_TEMP/key.p12" sh android/build.sh
+      - name: Publish release
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: |
+          gh release create "tv-${{ github.run_number }}" android/yaktube-tv.apk \
+            --title "YakTube TV ${{ github.run_number }}" --notes "Install on Google TV / Fire TV. See README." --latest

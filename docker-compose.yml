@@ -1,0 +1,22 @@
+# Works on a Synology NAS (Container Manager > Project) or any Docker host.
+# No build step: the standard Python image runs app.py straight from this folder,
+# so updating YakTube = replace app.py, then Restart.
+services:
+  yaktube:
+    image: python:3.12-alpine
+    container_name: yaktube
+    working_dir: /app
+    command: ["python3", "-u", "app.py"]
+    environment:
+      - YAK_DB=/data/yaktube.db
+    ports:
+      - "8080:8080"             # change the left number if 8080 is taken, e.g. "8484:8080"
+    volumes:
+      - ./app.py:/app/app.py:ro # the program (read-only)
+      - ./data:/data            # yaktube.db (profiles, subscriptions, history) lives in ./data
+    user: "0:0"                 # lets it write to NAS folders regardless of Synology permissions
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 1m
+      timeout: 5s
+    restart: unless-stopped

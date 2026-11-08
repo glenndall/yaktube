@@ -1,0 +1,68 @@
+# YakTube
+
+A tiny self-hosted YouTube portal: profiles, subscriptions, search, "For you" suggestions, watch history.
+No Google account, no API key, no dependencies: one Python file plus one SQLite database.
+
+## Run it
+- **Mac:** double-click `start.command` (first time: right-click → Open), or run `python3 app.py`.
+- **Synology NAS:** copy `app.py` and `docker-compose.yml` to a folder on the NAS, then Container Manager →
+  Project → Create → pick the folder → it finds `docker-compose.yml` → Next → Done. Open `http://<NAS-address>:8080`.
+  Data is in the folder's `data/yaktube.db` (include it in Hyper Backup).
+  **To update:** replace `app.py` in that folder, then Project → yaktube → Restart. No rebuild needed.
+- **Ubuntu (Docker):** `docker compose up -d` (same idea: no build step)
+- **Ubuntu (no Docker):** `python3 app.py` (Python 3.9+, nothing to install).
+- Open **http://localhost:8080**. Other devices on your network: `http://<this-computer's-IP>:8080`.
+
+Settings (optional env vars): `YAK_PORT` (8080), `YAK_DB` (./yaktube.db), `YAK_REFRESH_MIN` (30).
+
+## TV app (Google TV, Android TV, Fire TV)
+`android/` is a tiny TV app that opens YakTube full-screen and makes the remote work:
+arrows move between videos, OK opens, Back leaves the player / goes back. GitHub builds it automatically
+(Actions → "TV app") and attaches `yaktube-tv.apk` to a Release. It opens the address in the repo secret
+`YAK_URL` (Settings → Secrets and variables → Actions), so your address never sits in the code.
+- **Install:** put `yaktube-tv.apk` in the NAS `data/` folder. On the TV install the free **Downloader** app,
+  allow it to install unknown apps, and open `http://<NAS-address>:8080/yaktube-tv.apk`.
+- **First launch:** sign in once with your email code (Cloudflare tunnel with email verification policy); it remembers you for a month.
+- The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (`TV_CSS`), so it updates with the server.
+
+## Using it
+- **Profiles:** "Who's watching?" Each profile has its own subscriptions, history and suggestions.
+- **Search bar:** type words to search, or paste any YouTube link to watch it. Press `/` to jump there.
+- **Subscribe:** the button on any watch page, or paste a channel link / `@handle` on the Subscriptions page.
+- **Feed:** newest uploads from your subscriptions. Their Shorts are left out.
+- **For you:** suggestions worked out on this computer from your own history (see below).
+- **New to you:** channels you've never watched or subscribed to, found through the ones you like. One video per channel.
+- **Shorts:** full screen, one at a time, from all over YouTube (not your subscriptions), skipping ones you've
+  watched. Swipe up for the next one, down to go back, tap to pause; each one replays until you move on. On a computer use the mouse wheel,
+  arrow keys or the ▲▼ buttons; on the TV, the remote's Down / Up. ✕ (top left) or Back closes it.
+  Pasting a youtube.com/shorts/ link opens it here.
+- **Videos start with captions off.** Where the browser blocks autoplay (iPhone, Safari), press play. In Shorts,
+  a blocked Short starts muted with a "Tap for sound" button.
+- **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
+- **History:** remove single videos or clear it all. Removing a video also removes its influence on suggestions.
+
+## How it works
+- **Subscriptions:** each channel's public RSS feed. If YouTube's RSS is down (it is as of Nov 2026),
+  YakTube reads the channel's normal videos page instead. Checked every 30 minutes.
+- **Search and "Up next":** read from YouTube's public pages (the same data a logged-out browser sees).
+- **Playback:** YouTube's privacy-mode embedded player (youtube-nocookie.com). Nothing to download or extract.
+- **For you:** ranks the "up next" videos of your last 25 watches (recent ones count more) plus fresh unwatched
+  uploads from your subscriptions, boosted for channels you watch often. At most 3 per channel; never anything you've seen.
+- **Shorts:** once an hour YakTube opens youtube.com/shorts like a visitor who isn't logged in and keeps the ~40
+  Shorts YouTube offers (ones that can't play outside YouTube are skipped), up to the newest 200. It uses YouTube's
+  own internal request, so YouTube could break it. Watching Shorts doesn't change your For you / New to you suggestions.
+- **Tidy-up:** once a day YakTube forgets old "Up next" lists and videos nobody needs (unwatched, not from
+  your subscriptions, older than 60 days; subscription videos after a year), so the database stays a few MB.
+  Profiles, subscriptions and watch history are never touched.
+- **Data:** everything is in `yaktube.db`. Back it up by copying that file
+  (Docker: `docker cp yaktube:/data/yaktube.db .`).
+
+## Honest limits
+- Search and suggestions read YouTube's web pages. If YouTube changes their layout, those two features
+  show a friendly error until the parser in `app.py` (`parse_items`) is updated. Feed, history and playback keep working.
+- The embedded player still loads from YouTube, so YouTube sees your IP address (not any account).
+- Profiles have no PINs; anyone on your network can pick any profile.
+- A few videos block embedding; use "Open on YouTube" for those.
+
+## Tests
+`python3 test_app.py` runs everything against a fake YouTube (no network needed).
