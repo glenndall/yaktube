@@ -18,11 +18,13 @@ Settings (optional env vars): `YAK_PORT` (8080), `YAK_DB` (./yaktube.db), `YAK_R
 ## TV app (Google TV, Android TV, Fire TV)
 `android/` is a tiny TV app that opens YakTube full-screen and makes the remote work:
 arrows move between videos, OK opens, Back leaves the player / goes back. GitHub builds it automatically
-(Actions → "TV app") and attaches `yaktube-tv.apk` to a Release. It opens the address in the repo secret
-`YAK_URL` (Settings → Secrets and variables → Actions), so your address never sits in the code.
+(Actions → "TV app") and attaches `yaktube-tv.apk` to a Release. No address is built in, so the same app works
+with anyone's YakTube server.
 - **Install:** put `yaktube-tv.apk` in the NAS `data/` folder. On the TV install the free **Downloader** app,
   allow it to install unknown apps, and open `http://<NAS-address>:8080/yaktube-tv.apk`.
-- **First launch:** sign in once with your email code (Cloudflare tunnel with email verification policy); it remembers you for a month.
+- **First launch:** type your YakTube address (e.g. `http://192.168.1.20:8080/` or your own domain) once; the TV
+  keeps it. To change it later, use **Change address** on the "Can't reach YakTube" screen.
+- **Behind Cloudflare Access?** Sign in once with your email code (Cloudflare tunnel with email verification policy); it remembers you for a month.
 - The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (`TV_CSS`), so it updates with the server.
 
 ## Using it

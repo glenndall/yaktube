@@ -1,7 +1,6 @@
 #!/bin/sh
 # Builds yaktube-tv.apk with the Android SDK's own tools (no Gradle).
-# Needs: ANDROID_HOME, Java 17, env YAK_URL (your YakTube address, e.g. https://tv.example.com/),
-# and KEYSTORE (path to .p12) + KS_PASS.  VERSION (number) is optional.
+# Needs: ANDROID_HOME, Java 17, and env KEYSTORE (path to .p12) + KS_PASS.  VERSION (number) is optional.
 set -eu
 cd "$(dirname "$0")"
 BT="$ANDROID_HOME/build-tools/$(ls "$ANDROID_HOME/build-tools" | sort -V | tail -1)"
@@ -9,7 +8,7 @@ JAR="$ANDROID_HOME/platforms/$(ls "$ANDROID_HOME/platforms" | grep -E '^android-
 V="${VERSION:-1}"
 echo "build-tools: $BT"; echo "platform: $JAR"
 rm -rf build && mkdir -p build/classes
-cp -R src build/src && sed -i.bak "s#https://example.com/#${YAK_URL:?set YAK_URL}#" build/src/yaktube/tv/MainActivity.java
+cp -R src build/src
 
 "$BT/aapt2" compile --dir res -o build/res.zip
 "$BT/aapt2" link -o build/app.apk -I "$JAR" --manifest AndroidManifest.xml build/res.zip \

@@ -1,8 +1,11 @@
 package yaktube.tv;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.text.InputType;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -12,11 +15,12 @@ import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
+import android.widget.EditText;
 import android.widget.FrameLayout;
 
 /** YakTube TV: shows the YakTube website full-screen and makes the remote's arrow keys move between things. */
 public class MainActivity extends Activity {
-    static final String HOME = "https://example.com/";   // build.sh swaps in YAK_URL (a GitHub secret)
+    // No address is built in: the app asks for it on first launch and keeps it on the TV.
 
     // Arrow keys jump to the nearest link/button in that direction; Back leaves the video player.
     static final String NAV = "(function(){if(window.__yak)return;window.__yak=1;"
@@ -44,17 +48,45 @@ public class MainActivity extends Activity {
 
     static final String OFFLINE = "<body style='background:#111;color:#eee;font:22px sans-serif;text-align:center;padding-top:18vh'>"
         + "<h1>Can't reach YakTube</h1><p>Check the TV's internet connection and that the NAS is on.</p>"
-        + "<button autofocus onclick=\"location.href='" + HOME + "'\" style='font-size:24px;padding:12px 32px;border-radius:30px'>Try again</button></body>";
+        + "<button autofocus onclick=\"location.href='yaktube:home'\" style='font-size:24px;padding:12px 32px;border-radius:30px'>Try again</button> "
+        + "<button onclick=\"location.href='yaktube:setup'\" style='font-size:24px;padding:12px 32px;border-radius:30px'>Change address</button></body>";
 
     WebView web;
     FrameLayout root;
     View full;
     WebChromeClient.CustomViewCallback fullDone;
     WebChromeClient chrome;
+    SharedPreferences prefs;
+
+    String home() { return prefs.getString("url", null); }
+
+    /** Asks for the YakTube address (first launch, or "Change address") and opens it. */
+    void ask() {
+        EditText in = new EditText(this);
+        in.setSingleLine();
+        in.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        in.setHint("https://yaktube.example.com/");
+        if (home() != null) in.setText(home());
+        new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
+            .setTitle("YakTube address")
+            .setMessage("The web address of your YakTube server")
+            .setView(in)
+            .setCancelable(false)
+            .setPositiveButton("OK", (d, w) -> {
+                String u = in.getText().toString().trim();
+                if (u.isEmpty()) { ask(); return; }
+                if (!u.matches("(?i)https?://.*")) u = "https://" + u;
+                prefs.edit().putString("url", u).apply();
+                web.loadUrl(u);
+            })
+            .setNegativeButton("Cancel", (d, w) -> { if (home() == null) finish(); })
+            .show();
+    }
 
     @Override
     protected void onCreate(Bundle saved) {
         super.onCreate(saved);
+        prefs = getSharedPreferences("yaktube", MODE_PRIVATE);
         root = new FrameLayout(this);
         root.setBackgroundColor(Color.BLACK);
         web = new WebView(this);
@@ -71,6 +103,14 @@ public class MainActivity extends Activity {
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
         web.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(WebView v, WebResourceRequest req) { // buttons on the "Can't reach" page
+                String u = req.getUrl().toString();
+                if (u.equals("yaktube:setup")) { ask(); return true; }
+                if (u.equals("yaktube:home")) { if (home() != null) v.loadUrl(home()); else ask(); return true; }
+                return false;
+            }
+
             @Override
             public void onPageFinished(WebView v, String url) {
                 v.evaluateJavascript(NAV, null);
@@ -101,7 +141,8 @@ public class MainActivity extends Activity {
         };
         web.setWebChromeClient(chrome);
 
-        if (saved == null || web.restoreState(saved) == null) web.loadUrl(HOME);
+        if (home() == null) ask();
+        else if (saved == null || web.restoreState(saved) == null) web.loadUrl(home());
     }
 
     @Override
