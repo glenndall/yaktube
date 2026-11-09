@@ -58,6 +58,11 @@ public class MainActivity extends Activity {
     WebChromeClient chrome;
     SharedPreferences prefs;
 
+    // Addresses typed without http(s):// that are on the home network (an IP address, a bare name like "nas",
+    // or name.local / .lan / .home), optionally followed by :port or /path. These get http://, the rest https://.
+    static final java.util.regex.Pattern LOCAL = java.util.regex.Pattern.compile(
+        "(?i)(\\d+\\.\\d+\\.\\d+\\.\\d+|[^./:]+|[^/:]+\\.(local|lan|home))([:/].*)?");
+
     String home() { return prefs.getString("url", null); }
 
     /** Asks for the YakTube address (first launch, or "Change address") and opens it. */
@@ -69,13 +74,13 @@ public class MainActivity extends Activity {
         if (home() != null) in.setText(home());
         new AlertDialog.Builder(this, AlertDialog.THEME_DEVICE_DEFAULT_DARK)
             .setTitle("YakTube address")
-            .setMessage("The web address of your YakTube server")
+            .setMessage("The web address of your YakTube server, e.g. yaktube.example.com or 192.168.1.50:8080")
             .setView(in)
             .setCancelable(false)
             .setPositiveButton("OK", (d, w) -> {
                 String u = in.getText().toString().trim();
                 if (u.isEmpty()) { ask(); return; }
-                if (!u.matches("(?i)https?://.*")) u = "https://" + u;
+                if (!u.matches("(?i)https?://.*")) u = (LOCAL.matcher(u).matches() ? "http://" : "https://") + u;
                 prefs.edit().putString("url", u).apply();
                 web.loadUrl(u);
             })
