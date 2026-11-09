@@ -621,11 +621,12 @@ function tf(x){x=Math.max(0,Math.floor(x));var h=Math.floor(x/3600),m=Math.floor
 function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=tf(st.t)+(st.d?" / "+tf(st.d):"")}
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{};if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
-if(!cc&&(m.event=="onReady"||(st.s==1&&!st.off))){cmd("unloadModule",["captions"]);if(st.s==1)st.off=1}upd()});
+if(!cc&&(m.event=="onReady"||(st.s==1&&!st.off))){ccoff();if(st.s==1){st.off=1;setTimeout(ccoff,1500);setTimeout(ccoff,4000)}}upd()});
+function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for good: unloadModule came back after every seek
 function toggle(){if(st.s==1||st.s==3){cmd("pauseVideo");st.s=2}else{cmd("playVideo");st.s=1}upd()}
 function seek(d){st.t=Math.min(Math.max(0,st.t+d),st.d||1e9);cmd("seekTo",[st.t,true]);upd()}
 $("pp").onclick=toggle;[].forEach.call(document.querySelectorAll("[data-k]"),function(b){b.onclick=function(){seek(+b.dataset.k)}});
-$("cc").onclick=function(){cc=!cc;cmd(cc?"loadModule":"unloadModule",["captions"]);if(cc)cmd("setOption",["captions","track",{languageCode:"en"}]);this.textContent="CC "+(cc?"on":"off")};
+$("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("setOption",["captions","track",{languageCode:"en"}])}else ccoff();this.textContent="CC "+(cc?"on":"off")};
 $("sp").onclick=function(){ri=(ri+1)%rates.length;cmd("setPlaybackRate",[rates[ri]]);this.textContent="Speed "+rates[ri]+"×"};
 addEventListener("keydown",function(k){var c=k.key;if(c=="MediaPlayPause"||c=="MediaPlay"||c=="MediaPause"){toggle();k.preventDefault()}
 else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewind"){seek(-10);k.preventDefault()}});
@@ -646,11 +647,11 @@ var hello=setInterval(function(){post({event:"listening",id:1,channel:"widget"})
 addEventListener("message",function(e){if(e.source!==f.contentWindow)return;var m;try{m=JSON.parse(e.data)}catch(x){return}
 if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{};if("playerState" in i)st.s=i.playerState;if("muted" in i)st.muted=i.muted;
-if(m.event=="onReady"&&!go){go=1;cmd("unloadModule",["captions"]);if(!plain){cmd("addEventListener",["onAutoplayBlocked"]);cmd("playVideo");setTimeout(quiet,2500)}}
+if(m.event=="onReady"&&!go){go=1;cc();if(!plain){cmd("addEventListener",["onAutoplayBlocked"]);cmd("playVideo");setTimeout(quiet,2500)}}
 if(m.event=="onAutoplayBlocked"&&!plain)quiet();
 if(st.s==1&&!st.off){st.off=1;cc();setTimeout(cc,1500);setTimeout(cc,4000)}
 on&&on(st,m)});
-function cc(){cmd("unloadModule",["captions"])}  // YouTube loads captions a moment after starting: switch them off again
+function cc(){cmd("setOption",["captions","track",{}])}  // captions off; unlike unloadModule this survives seeking
 return{st:st,cmd:cmd}}</script>"""
 EMBED = "https://www.youtube-nocookie.com/embed/"
 WEB_PLAYER = """<div class="pw"><iframe id="yt" class="player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"

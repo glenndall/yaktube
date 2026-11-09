@@ -237,7 +237,7 @@ class T(unittest.TestCase):
         a = self.login("TVtest")
         _, _, page = self.get(a, "/watch?v=vid00000002")
         self.assertIn('<iframe id="yt" class="player"', page)          # normal browsers: YouTube's controls
-        self.assertIn('unloadModule",["captions"]', page)               # captions start off
+        self.assertIn('setOption",["captions","track",{}]', page)     # captions start off (and stay off after seeking)
         self.assertIn('yakPlayer(f,null,1)', page)                      # Feed: no muted autoplay fallback
         self.assertNotIn('Tap for sound', page)
         self.assertNotIn('id="pp"', page)
