@@ -100,3 +100,6 @@ YakTube has no login, so **never open port 8080 to the internet**. Two safe ways
 
 ## Tests
 `python3 test_app.py` runs everything against a fake YouTube (no network needed).
+
+## License
+MIT. See [LICENSE](LICENSE).
