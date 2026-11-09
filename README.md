@@ -17,15 +17,24 @@ Settings (optional env vars): `YAK_PORT` (8080), `YAK_DB` (./yaktube.db), `YAK_R
 
 ## TV app (Google TV, Android TV, Fire TV)
 `android/` is a tiny TV app that opens YakTube full-screen and makes the remote work:
-arrows move between videos, OK opens, Back leaves the player / goes back. GitHub builds it automatically
-(Actions → "TV app") and attaches `yaktube-tv.apk` to a Release. No address is built in, so the same app works
-with anyone's YakTube server.
-- **Install:** put `yaktube-tv.apk` in the NAS `data/` folder. On the TV install the free **Downloader** app,
-  allow it to install unknown apps, and open `http://<NAS-address>:8080/yaktube-tv.apk`.
-- **First launch:** type your YakTube address (e.g. `http://192.168.1.20:8080/` or your own domain) once; the TV
-  keeps it. To change it later, use **Change address** on the "Can't reach YakTube" screen.
-- **Behind Cloudflare Access?** Sign in once with your email code (Cloudflare tunnel with email verification policy); it remembers you for a month.
-- The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (`TV_CSS`), so it updates with the server.
+arrows move between videos, OK opens, Back leaves the player / goes back.
+GitHub builds it automatically (Actions → "TV app"); download `yaktube-tv.apk` from the latest Release.
+No address is built in, so the same app works with anyone's YakTube.
+
+**Install it on the TV:**
+1. Put `yaktube-tv.apk` next to the database (on a NAS: the `data/` folder). YakTube then offers it at
+   `http://<NAS-address>:8080/yaktube-tv.apk`.
+2. On the TV, install the free **Downloader** app and allow it to install unknown apps
+   (Settings → Apps → Security / Device preferences → Install unknown apps → Downloader).
+3. In Downloader, enter `http://<NAS-address>:8080/yaktube-tv.apk` and choose **Install**.
+   Use the NAS's number address (e.g. `192.168.1.20`); TVs often don't understand `NAS.local`.
+4. Open YakTube on the TV. It asks for the address once: type it in full, e.g. `http://192.168.1.20:8080/`.
+   To change it later, use **Change address** on the "Can't reach YakTube" screen.
+
+**To update:** replace the `.apk` in the same place and install it again from Downloader. It installs over the old
+one and keeps the address and profile.
+
+The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (`TV_CSS`), so it updates with the server.
 
 ## Using it
 - **Profiles:** "Who's watching?" Each profile has its own subscriptions, history and suggestions.
@@ -58,6 +67,15 @@ with anyone's YakTube server.
   Profiles, subscriptions and watch history are never touched.
 - **Data:** everything is in `yaktube.db`. Back it up by copying that file
   (Docker: `docker cp yaktube:/data/yaktube.db .`).
+
+## Using it away from home
+YakTube has no login, so **never open port 8080 to the internet**. Two safe ways to reach it from your phone:
+- **Tailscale** (simplest): install it on the NAS and your phone; your phone then reaches YakTube at the NAS's
+  Tailscale address, as if you were home. Nothing is exposed to the internet.
+- **Cloudflare Tunnel + Cloudflare Access:** gives YakTube a web address on your own domain without opening ports.
+  Add an Access policy that only lets in your email address; Cloudflare then emails a one-time code before
+  anyone reaches YakTube. Both are on Cloudflare's free plan. The TV app works through it too: sign in once
+  with the code and it stays signed in for as long as your Access session lasts.
 
 ## Honest limits
 - Search and suggestions read YouTube's web pages. If YouTube changes their layout, those two features

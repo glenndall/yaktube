@@ -167,7 +167,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
-        CookieManager.getInstance().flush(); // stay signed in to Cloudflare and keep the profile
+        CookieManager.getInstance().flush(); // stay signed in (e.g. a login page in front of YakTube) and keep the profile
         web.onPause();
     }
 
