@@ -13,7 +13,21 @@ No Google account, no API key, no dependencies: one Python file plus one SQLite 
 - **Ubuntu (no Docker):** `python3 app.py` (Python 3.9+, nothing to install).
 - Open **http://localhost:8080**. Other devices on your network: `http://<this-computer's-IP>:8080`.
 
-Settings (optional env vars): `YAK_PORT` (8080), `YAK_DB` (./yaktube.db), `YAK_REFRESH_MIN` (30).
+### Settings (optional)
+YakTube reads a few environment variables (there's no `.env` file). Leave them out to use the defaults.
+
+| Variable | Default | What it does |
+|---|---|---|
+| `YAK_REFRESH_MIN` | `30` | Minutes between checks for new videos from your subscriptions |
+| `YAK_DB` | `./yaktube.db` | Where the database lives (Docker: `/data/yaktube.db`, already set) |
+| `YAK_PORT` | `8080` | Port to listen on (not for Docker, see below) |
+| `YAK_HOST` | `0.0.0.0` | Address to listen on; `127.0.0.1` keeps it to this computer only |
+
+- **Docker / NAS:** add them under `environment:` in `docker-compose.yml`, e.g. `- YAK_REFRESH_MIN=60`.
+  To use another port, change the left number in `ports:` (e.g. `"8484:8080"`), not `YAK_PORT`.
+  A plain Restart keeps the old settings: on a Synology, stop the project, edit the file, then Build;
+  elsewhere run `docker compose up -d`. Your data in `data/` stays.
+- **Without Docker:** put them in front of the command, e.g. `YAK_PORT=9000 python3 app.py`.
 
 ## TV app (Google TV, Android TV, Fire TV)
 `android/` is a tiny TV app that opens YakTube full-screen and makes the remote work:
