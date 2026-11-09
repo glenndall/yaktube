@@ -54,6 +54,8 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 - **Profiles:** "Who's watching?" Each profile has its own subscriptions, history and suggestions.
 - **Search bar:** type words to search, or paste any YouTube link to watch it. Press `/` to jump there.
 - **Subscribe:** the button on any watch page, or paste a channel link / `@handle` on the Subscriptions page.
+- **Channel pages:** click a channel's name (under any video, on a watch page, or in Subscriptions) to see its
+  newest ~30 videos and subscribe or unsubscribe there. On the TV, open a video and pick the channel name below it.
 - **Feed:** newest uploads from your subscriptions. The **Shorts** switch (next to Refresh) hides or shows their Shorts.
 - **For you:** suggestions worked out on this computer from your own history (see below).
 - **New to you:** channels you've never watched or subscribed to, found through the ones you like. One video per channel.

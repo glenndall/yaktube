@@ -35,6 +35,9 @@ def fake_fetch(url, timeout=10):
     if f"/channel/{CID2}/videos" in url:
         return page({"items": [lockup("chb00000001", "Newest retro", when="1d ago"), lockup("chb00000002", "Older retro", when="1w ago")]},
                     '<meta property="og:title" content="Retro &amp; Co">')
+    if f"/channel/{CID}/videos" in url:   # the channel page looks past the feed's newest few
+        return page({"items": [lockup("vid00000004", "Video 4 <b>"), lockup("old00000001", "Back catalogue", when="2y ago")]},
+                    '<meta property="og:title" content="Woz &amp; Friends">')
     if "results?" in url: return page(SEARCH)
     if "watch?v=srch0000001" in url: return page({"r": RELATED}, f'"channelId":"{CID2}","viewCount":"17872","publishDate":"2013-11-09T12:00:00-08:00"')
     if "oembed" in url: return '{"title":"Outside vid","author_name":"Other","author_url":"https://www.youtube.com/@other"}'
@@ -162,6 +165,41 @@ class T(unittest.TestCase):
         app.fetch = lambda *a, **k: (_ for _ in ()).throw(IOError("offline"))
         try: self.assertIn("Search isn", self.get(a, "/search?q=zzz")[2])
         finally: app.fetch = fake_fetch
+
+    def test_14_channel(self):
+        a = self.login("Chan")
+        # a channel you're not subscribed to: its videos, a Subscribe button, and more than the feed's newest few
+        app.CHANNEL_AT.clear()
+        s, url, page = self.get(a, "/channel?id=" + CID)
+        self.assertIn("<h1>Woz &amp; Friends</h1>", page)
+        self.assertIn("Subscribe</button>", page)
+        self.assertLess(page.index("Video 4"), page.index("Video 1"))  # newest first
+        self.assertIn("Back catalogue", page)                          # from the channel's videos page
+        self.assertIn("4 days ago", page)                              # the feed's exact date wins over "3d ago"
+        self.assertNotIn("Your feed is empty", page)
+        self.assertIn("Your feed is empty", self.get(a, "/")[2])        # looking doesn't subscribe
+        # subscribe from the channel page: comes back to it, now subscribed
+        s, url, page = self.get(a, "/subs/add", {"url": CID, "next": "/channel?id=" + CID})
+        self.assertIn("/channel?id=" + CID, url)
+        self.assertIn("Subscribed ✓", page)
+        # cards, the watch page and the subscriptions list all lead here
+        self.assertIn(f'data-ch="{CID}"', self.get(a, "/")[2])
+        self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/watch?v=vid00000002")[2])
+        self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/subs")[2])
+        self.assertIn('card seen" href="/watch?v=vid00000002', self.get(a, "/channel?id=" + CID)[2])
+        # a handle is looked up; works with the feed down; cached pages need no network; junk is a tidy 404
+        self.assertTrue(self.get(a, "/channel?id=%40woz")[1].endswith("/channel?id=" + CID))
+        self.assertIn("Newest retro", self.get(a, "/channel?id=" + CID2)[2])
+        app.fetch = lambda *a, **k: (_ for _ in ()).throw(IOError("offline"))
+        try:
+            self.assertIn("Back catalogue", self.get(a, "/channel?id=" + CID)[2])
+            app.CHANNEL_AT.clear()
+            page = self.get(a, "/channel?id=" + CID)[2]
+            self.assertIn("Couldn&#x27;t check this channel", page)
+            self.assertIn("Back catalogue", page)                      # still shows what it has
+        finally: app.fetch = fake_fetch
+        try: self.get(a, "/channel?id=" + urllib.parse.quote("<script>")); self.fail()
+        except urllib.error.HTTPError as ex: self.assertEqual(ex.code, 404)
 
     def test_7_for_you(self):
         a = self.login("FY")

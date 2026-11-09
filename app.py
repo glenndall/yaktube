@@ -204,23 +204,37 @@ def store_videos(c, vids, exact=False):
         raise
 
 
-def refresh_channel(c, cid):
-    """RSS first (exact dates); if YouTube's RSS is down, read the channel's /videos page instead."""
+CHANNEL_AT = {}   # channel id -> when its channel page last read YouTube (so browsing doesn't refetch every click)
+
+
+def channel_videos(cid):
+    """A channel's normal /videos page: its title and newest ~30 videos (approximate dates)."""
+    page, d = yt_data(f"https://www.youtube.com/channel/{cid}/videos")
+    m = re.search(r'<meta property="og:title" content="([^"]*)"', page)
+    title = html.unescape(m.group(1)) if m else ""
+    if not d:
+        raise ValueError("Couldn't load that channel's videos.")
+    return title, [dict(v, channel_id=cid, channel_title=title) for v in parse_items(d)]
+
+
+def refresh_channel(c, cid, deep=False):
+    """RSS first (exact dates); if YouTube's RSS is down, read the channel's /videos page instead.
+    deep=True (the channel page) reads the /videos page as well: RSS only lists the newest 15."""
     try:
         title, vids = parse_feed(fetch(FEED + cid))
         exact = True
     except Exception:
-        page, d = yt_data(f"https://www.youtube.com/channel/{cid}/videos")
-        m = re.search(r'<meta property="og:title" content="([^"]*)"', page)
-        title = html.unescape(m.group(1)) if m else ""
-        if not d:
-            raise ValueError("Couldn't load that channel's videos.")
-        vids = [dict(v, channel_id=cid, channel_title=title) for v in parse_items(d)]
-        exact = False
+        title, vids = channel_videos(cid)
+        exact = deep = False
     c.execute("INSERT INTO channels(id,title,fetched_at) VALUES(?,?,?) "
               "ON CONFLICT(id) DO UPDATE SET title=excluded.title, fetched_at=excluded.fetched_at",
               (cid, title or cid, int(time.time())))
     store_videos(c, vids, exact)
+    if deep:
+        try:
+            store_videos(c, channel_videos(cid)[1])
+        except Exception as ex:
+            print(f"[channel] {cid}: {ex}")
     return title
 
 
@@ -565,6 +579,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .card img{width:100%;aspect-ratio:16/9;object-fit:cover;border-radius:10px;background:var(--line);display:block}
 .card h3{font-size:14.5px;font-weight:600;margin:8px 0 2px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card:hover h3{color:var(--accent)}
+[data-ch]:hover,a.ch:hover{color:var(--fg);text-decoration:underline}
 .meta{color:var(--muted);font-size:13px}
 .seen img{opacity:.45}
 .empty{padding:60px 20px;text-align:center;color:var(--muted)}.empty p{max-width:460px;margin:8px auto 18px}
@@ -779,9 +794,13 @@ def card(v, seen=False):
     short = "short" in v.keys() and v["short"]
     meta = " · ".join(x for x in ("Short" if short else "", views(v["views"]), ago(v["published"])) if x)
     href = ("/shorts?v=" if short else "/watch?v=") + v["id"]   # Shorts open in the full-screen Shorts player
+    # the channel name opens its channel page on a click or tap (see layout); it's not a link of its own,
+    # so the TV remote still steps from video to video
+    cid = v["channel_id"] if "channel_id" in v.keys() else None
+    ch = f'<span data-ch="{cid}">{e(v["channel_title"] or "")}</span>' if cid and CID_RE.fullmatch(cid) else e(v["channel_title"] or "")
     return (f'<a class="card{" seen" if seen else ""}" href="{href}">'
             f'<img loading="lazy" src="{thumb(v["id"])}" alt=""><h3>{e(v["title"] or v["id"])}</h3>'
-            f'<div class="meta">{e(v["channel_title"] or "")}</div><div class="meta">{meta}</div></a>')
+            f'<div class="meta">{ch}</div><div class="meta">{meta}</div></a>')
 
 
 def side_row(r, seen=False):
@@ -810,6 +829,8 @@ def layout(title, body, prof=None, tab="", q=""):
         # press "/" anywhere to jump to the search box
         '<script>addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))'
         '{k.preventDefault();document.querySelector(".go input").focus()}});'
+        'addEventListener("click",k=>{var c=k.target.closest&&k.target.closest("[data-ch]");'
+        'if(c){k.preventDefault();location.href="/channel?id="+c.dataset.ch}});'
         'var t=document.querySelector("nav .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script></body></html>')
 
 
@@ -874,7 +895,7 @@ class App(BaseHTTPRequestHandler):
             if not self.prof:
                 return self.redirect("/profiles")
             h = {("GET", "/"): self.feed, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
-                 ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add,
+                 ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add, ("GET", "/channel"): self.channel,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): self.foryou, ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
@@ -1061,13 +1082,16 @@ class App(BaseHTTPRequestHandler):
                                    (v["channel_id"], vid)).fetchall()
             side = "".join(side_row(r) for r in rows)
         meta = " · ".join(x for x in (views(v["views"]), ago(v["published"])) if x)
+        chan = f'<strong>{e(v["channel_title"] or "")}</strong>'
+        if v["channel_id"] or v["channel_url"]:              # opens the channel page
+            chan = f'<a class="ch" href="/channel?id={urllib.parse.quote(v["channel_id"] or v["channel_url"], safe="")}">{chan}</a>'
         if "YakTubeTV" in self.headers.get("User-Agent", ""):
             player = TV_PLAYER.replace("__VID__", vid)
         else:
             player = WEB_PLAYER.replace("__VID__", vid)
         body = (f'<div class="watch"><div>{player}'
                 f'<h1>{e(v["title"] or "Video")}</h1>'
-                f'<div class="bar"><strong>{e(v["channel_title"] or "")}</strong>{sub}'
+                f'<div class="bar">{chan}{sub}'
                 f'<span class="meta" style="margin-left:auto">{meta}</span>'
                 f'<a class="meta" href="https://www.youtube.com/watch?v={vid}" target="_blank" rel="noopener">Open on YouTube ↗</a></div></div>'
                 f'<aside><h3 style="margin-top:0">Up next</h3><div id="upnext"><p class="meta">Loading…</p></div>'
@@ -1086,7 +1110,7 @@ class App(BaseHTTPRequestHandler):
             (pid,)).fetchall()
         items = "".join(
             f'<div><div class="av" style="background:{COLORS[sum(map(ord, r["id"])) % len(COLORS)]}">{e(r["title"][:1].upper())}</div>'
-            f'<div class="grow"><strong>{e(r["title"])}</strong><div class="meta">'
+            f'<div class="grow"><a class="ch" href="/channel?id={r["id"]}"><strong>{e(r["title"])}</strong></a><div class="meta">'
             f'{"Last upload " + ago(r["last"]) if r["last"] else "No videos fetched yet"}</div></div>'
             f'<a class="meta" href="https://www.youtube.com/channel/{r["id"]}" target="_blank" rel="noopener">YouTube ↗</a>'
             f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{r["id"]}">'
@@ -1099,6 +1123,48 @@ class App(BaseHTTPRequestHandler):
                   f'<button class="btn">Subscribe</button></form>'
                 + (f'<div class="list">{items}</div>' if rows else '<p class="meta">No subscriptions yet.</p>'))
         self.send(layout("Subscriptions", body, self.prof, "subs"))
+
+    def channel(self):
+        """One channel's videos, newest first, whether or not you're subscribed."""
+        cid, pid = self.q.get("id", "").strip(), self.prof["id"]
+        if not CID_RE.fullmatch(cid):                        # a handle or channel link: look up its id first
+            try:
+                return self.redirect("/channel?id=" + resolve_channel(cid))
+            except Exception as ex:
+                print("[channel]", repr(ex))
+                return self.send(layout("Channel", '<div class="empty"><h1>Channel not found</h1>'
+                                        '<a class="btn" href="/">Back to your feed</a></div>', self.prof), 404)
+        page = max(1, int(self.q.get("page", "1")) if self.q.get("page", "").isdigit() else 1)
+        find = lambda: self.db.execute("SELECT * FROM channels WHERE id=?", (cid,)).fetchone()
+        ch, err = find(), ""
+        if CHANNEL_AT.get(cid, 0) < time.time() - REFRESH_MIN * 60:
+            CHANNEL_AT[cid] = time.time()
+            try:
+                refresh_channel(self.db, cid, deep=True)
+            except Exception as ex:
+                print("[channel]", cid, repr(ex))
+                err = "Couldn't check this channel for new videos just now."
+            ch = find()
+        rows = self.db.execute(
+            "SELECT v.*, h.video_id AS seen FROM videos v LEFT JOIN history h ON h.video_id=v.id AND h.profile_id=? "
+            "WHERE v.channel_id=? ORDER BY v.published DESC LIMIT ? OFFSET ?",
+            (pid, cid, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)).fetchall()
+        title = ch["title"] if ch else next((r["channel_title"] for r in rows if r["channel_title"]), "Channel")
+        nxt = e(f"/channel?id={cid}")
+        if self.db.execute("SELECT 1 FROM subs WHERE profile_id=? AND channel_id=?", (pid, cid)).fetchone():
+            sub = (f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{cid}">'
+                   f'<input type="hidden" name="next" value="{nxt}"><button class="btn ghost small">Subscribed ✓</button></form>')
+        else:
+            sub = (f'<form method="post" action="/subs/add"><input type="hidden" name="url" value="{cid}">'
+                   f'<input type="hidden" name="next" value="{nxt}"><button class="btn small">Subscribe</button></form>')
+        more = len(rows) > PAGE_SIZE
+        grid = "".join(card(v, v["seen"]) for v in rows[:PAGE_SIZE])
+        body = (f'<div class="bar"><h1>{e(title)}</h1><div class="acts">{sub}</div>'
+                f'<a class="meta" href="https://www.youtube.com/channel/{cid}" target="_blank" rel="noopener">YouTube ↗</a></div>'
+                + (f'<div class="err">{e(err)}</div>' if err else "")
+                + (f'<div class="grid">{grid}</div>' if grid else '<p class="meta">No videos found for this channel.</p>')
+                + (f'<p class="center" style="margin-top:30px"><a class="btn ghost" href="/channel?id={cid}&page={page + 1}">Load more</a></p>' if more else ""))
+        self.send(layout(title, body, self.prof))
 
     def sub_add(self):
         f = self.form()
