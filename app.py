@@ -600,16 +600,17 @@ a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;o
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
 a[target=_blank]{display:none}
-.watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:calc(100vh - 58px);overflow:hidden}
-.tvbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:8px}
+.watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:100vh;overflow:hidden}.tvp{position:relative}
+.tvbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:48px 22px 18px;
+border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .5s}.tvbar.hide{opacity:0}
 .tvbar button{font:inherit;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:0;background:var(--card);color:var(--fg)}
-.tvbar button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px}
+.tvbar button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
 </style>"""
 # TV player: the YouTube player never takes the remote's focus (it lives in a shadow root the remote
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
-TV_PLAYER = """<div id="pl" class="player"></div>
+TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
 <div class="tvbar"><button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>
-<button id="cc">CC off</button><button id="sp">Speed 1×</button><span id="tm" class="meta">0:00</span></div>
+<button id="cc">CC off</button><button id="sp">Speed 1×</button><span id="tm" class="meta">0:00</span></div></div>
 <script>(function(){var V="__VID__",st={t:0,d:0,s:-1},cc=false,rates=[1,1.25,1.5,2,0.75],ri=0,$=function(i){return document.getElementById(i)};
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media; fullscreen";f.referrerPolicy="strict-origin-when-cross-origin";
 f.style.cssText="width:100%;height:100%;border:0;display:block;background:#000";
@@ -620,7 +621,8 @@ var hello=setInterval(function(){f.contentWindow&&f.contentWindow.postMessage(JS
 function tf(x){x=Math.max(0,Math.floor(x));var h=Math.floor(x/3600),m=Math.floor(x/60)%60,s=("0"+x%60).slice(-2);return(h?h+":"+("0"+m).slice(-2):m)+":"+s}
 function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=tf(st.t)+(st.d?" / "+tf(st.d):"")}
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
-var i=m.info||{};if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
+var i=m.info||{},was=st.s;if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
+if(st.s!=was)wake();
 if(!cc&&(m.event=="onReady"||(st.s==1&&!st.off))){ccoff();if(st.s==1){st.off=1;setTimeout(ccoff,1500);setTimeout(ccoff,4000)}}upd()});
 function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for good: unloadModule came back after every seek
 function toggle(){if(st.s==1||st.s==3){cmd("pauseVideo");st.s=2}else{cmd("playVideo");st.s=1}upd()}
@@ -631,8 +633,13 @@ $("sp").onclick=function(){ri=(ri+1)%rates.length;cmd("setPlaybackRate",[rates[r
 addEventListener("keydown",function(k){var c=k.key;if(c=="MediaPlayPause"||c=="MediaPlay"||c=="MediaPause"){toggle();k.preventDefault()}
 else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewind"){seek(-10);k.preventDefault()}});
 var bar=document.querySelector(".tvbar");[].forEach.call(bar.querySelectorAll("button"),function(b){b.scrollIntoView=function(){}});
-function home(){var y=$("pl").getBoundingClientRect().top+scrollY-8;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
+function home(){var y=$("pl").getBoundingClientRect().top+scrollY;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
 bar.addEventListener("focusin",home);addEventListener("load",home);
+// The buttons fade out after 5s of no remote presses while playing; the next press only brings them back
+// (so OK doesn't also pause). Play/pause and fast-forward/rewind keys always act straight away.
+var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
+addEventListener("keydown",function(k){var hid=bar.classList.contains("hide");wake();
+if(hid&&!/^Media/.test(k.key)){k.preventDefault();k.stopImmediatePropagation()}},true);
 $("pp").focus()})()</script>"""
 APK = os.path.join(os.path.dirname(DB_PATH), "yaktube-tv.apk")
 
