@@ -78,7 +78,12 @@ class T(unittest.TestCase):
         s, url, page = self.get(a, "/")
         self.assertIn("Video 4 &lt;b&gt;", page)                      # escaped, newest first
         self.assertLess(page.index("Video 4"), page.index("Video 1"))
-        self.assertNotIn("Video 3", page)                             # shorts live in their own tab
+        self.assertIn('href="/shorts?v=vid00000003"', page)           # subs' Shorts are on by default
+        self.assertIn('aria-checked="true"', page)
+        s, url, page = self.get(a, "/feed/shorts", {})                 # toggle them off
+        self.assertNotIn("Video 3", page)
+        self.assertIn('aria-checked="false"', page)
+        self.get(a, "/feed/shorts", {})                                # and back on
         self.assertIn("4.9M views", page)
         s, url, page = self.get(a, "/watch?v=vid00000002")
         self.assertIn("youtube-nocookie.com/embed/vid00000002", page)
@@ -297,7 +302,9 @@ class T(unittest.TestCase):
         s, url, _ = self.get(a, "/go?q=" + urllib.parse.quote("https://youtube.com/shorts/shr00000002"))
         self.assertTrue(url.endswith("/shorts?v=shr00000002"))
         app.OUTSIDE[:] = []
-        self.assertNotIn("shr0000000", self.get(a, "/")[2])                            # not in the feed
+        self.assertIn('href="/shorts?v=shr00000002"', self.get(a, "/")[2])             # subs' Shorts: in the feed (toggle on)
+        self.get(a, "/feed/shorts", {})
+        self.assertNotIn("shr0000000", self.get(a, "/")[2])                            # toggle off: not in the feed
         self.assertIn('href="/shorts"', self.get(a, "/")[2])                           # the tab
 
     def test_12_icons(self):

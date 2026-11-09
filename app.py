@@ -60,6 +60,8 @@ def init_db():
     c = connect()
     c.execute("PRAGMA journal_mode=WAL")
     c.executescript(SCHEMA)
+    if "feed_shorts" not in [r[1] for r in c.execute("PRAGMA table_info(profiles)")]:  # added Nov 2026
+        c.execute("ALTER TABLE profiles ADD COLUMN feed_shorts INTEGER DEFAULT 1")       # Feed shows subs' Shorts
     c.close()
 
 
@@ -551,6 +553,10 @@ input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .btn{display:inline-block;padding:7px 16px;border-radius:999px;border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
 .btn.ghost{background:var(--card);color:var(--fg);box-shadow:0 0 0 1px var(--line)}
 .btn.small{padding:4px 12px;font-size:13px}
+.sw i{display:inline-block;position:relative;width:26px;height:14px;margin-left:8px;vertical-align:-2px;border-radius:9px;background:var(--line);transition:.15s}
+.sw i:after{content:"";position:absolute;top:2px;left:2px;width:10px;height:10px;border-radius:50%;background:#fff;transition:.15s}
+.sw.on i{background:var(--accent)}.sw.on i:after{left:14px}
+.acts{display:flex;gap:8px}
 .av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex:none}
 main{max-width:1440px;margin:0 auto;padding:22px 20px 60px}
 h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
@@ -762,8 +768,10 @@ def thumb(vid):
 
 
 def card(v, seen=False):
-    meta = " · ".join(x for x in (views(v["views"]), ago(v["published"])) if x)
-    return (f'<a class="card{" seen" if seen else ""}" href="/watch?v={v["id"]}">'
+    short = "short" in v.keys() and v["short"]
+    meta = " · ".join(x for x in ("Short" if short else "", views(v["views"]), ago(v["published"])) if x)
+    href = ("/shorts?v=" if short else "/watch?v=") + v["id"]   # Shorts open in the full-screen Shorts player
+    return (f'<a class="card{" seen" if seen else ""}" href="{href}">'
             f'<img loading="lazy" src="{thumb(v["id"])}" alt=""><h3>{e(v["title"] or v["id"])}</h3>'
             f'<div class="meta">{e(v["channel_title"] or "")}</div><div class="meta">{meta}</div></a>')
 
@@ -859,7 +867,7 @@ class App(BaseHTTPRequestHandler):
                 return self.redirect("/profiles")
             h = {("GET", "/"): self.feed, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
                  ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add,
-                 ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh,
+                 ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): self.foryou, ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
@@ -907,6 +915,7 @@ class App(BaseHTTPRequestHandler):
     def feed(self):
         pid = self.prof["id"]
         page = max(1, int(self.q.get("page", "1")) if self.q.get("page", "").isdigit() else 1)
+        on = 1 if self.prof["feed_shorts"] else 0
         nsubs = self.db.execute("SELECT COUNT(*) FROM subs WHERE profile_id=?", (pid,)).fetchone()[0]
         if not nsubs:
             return self.send(layout("Feed", '<div class="empty"><h1>Your feed is empty</h1><p>Subscribe to a few channels '
@@ -914,13 +923,15 @@ class App(BaseHTTPRequestHandler):
                                     '<a class="btn" href="/subs">Add subscriptions</a></div>', self.prof, "feed"))
         rows = self.db.execute(
             "SELECT v.*, h.video_id AS seen FROM videos v JOIN subs s ON s.channel_id=v.channel_id AND s.profile_id=? "
-            "LEFT JOIN history h ON h.video_id=v.id AND h.profile_id=? WHERE v.short=0 "   # Shorts have their own tab
+            "LEFT JOIN history h ON h.video_id=v.id AND h.profile_id=? WHERE (v.short=0 OR ?) "   # Shorts toggle
             "ORDER BY v.published DESC LIMIT ? OFFSET ?",
-            (pid, pid, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)).fetchall()
+            (pid, pid, on, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)).fetchall()
         more = len(rows) > PAGE_SIZE
         grid = "".join(card(v, v["seen"]) for v in rows[:PAGE_SIZE])
         body = (f'<div class="bar"><h1>Latest from your subscriptions</h1>'
-                f'<form method="post" action="/refresh"><button class="btn ghost small">Refresh</button></form></div>'
+                f'<div class="acts"><form method="post" action="/feed/shorts"><button class="btn ghost small sw{" on" if on else ""}" role="switch" '
+                f'aria-checked="{"true" if on else "false"}" title="Show Shorts from your subscriptions">Shorts<i></i></button></form>'
+                f'<form method="post" action="/refresh"><button class="btn ghost small">Refresh</button></form></div></div>'
                 f'<div class="grid">{grid or "<p class=meta>Fetching videos… refresh in a moment.</p>"}</div>'
                 + (f'<p class="center" style="margin-top:30px"><a class="btn ghost" href="/?page={page + 1}">Load more</a></p>' if more else ""))
         self.send(layout("Feed", body, self.prof, "feed"))
@@ -970,6 +981,10 @@ class App(BaseHTTPRequestHandler):
             ensure_video(self.db, vid)
             mark_watched(self.db, self.prof["id"], vid)
         self.send("", 204)
+
+    def feed_shorts(self):
+        self.db.execute("UPDATE profiles SET feed_shorts=1-COALESCE(feed_shorts,1) WHERE id=?", (self.prof["id"],))
+        self.redirect("/")
 
     def refresh(self):
         refresh_stale(force=True)
