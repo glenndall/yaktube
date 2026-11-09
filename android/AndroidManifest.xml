@@ -5,7 +5,7 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
     <uses-feature android:name="android.hardware.touchscreen" android:required="false" />
     <!-- usesCleartextTraffic: a YakTube server on the home network is usually plain http:// -->
-    <application android:label="YakTube" android:usesCleartextTraffic="true"android:icon="@drawable/icon" android:banner="@drawable/banner"
+    <application android:label="YakTube" android:usesCleartextTraffic="true" android:icon="@drawable/icon" android:banner="@drawable/banner"
         android:theme="@android:style/Theme.NoTitleBar.Fullscreen" android:hardwareAccelerated="true">
         <activity android:name=".MainActivity" android:exported="true" android:launchMode="singleTask"
             android:screenOrientation="landscape"
