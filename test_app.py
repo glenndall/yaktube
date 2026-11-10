@@ -228,7 +228,9 @@ class T(unittest.TestCase):
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         page = self.get(a, "/watch?v=vid00000002")[2]
         self.assertIn("t0=125,", page)                                 # the TV player resumes too
-        self.assertIn('id="nxg">Play now', page)                       # ...and offers the next video when one ends
+        self.assertIn('id="nxg">Play now', page)                       # ...and can play the next video when one ends,
+        self.assertIn('id="ap">Autoplay off', page)                    # but only if switched on (off by default)
+        self.assertIn('if(!ap||!a||nx)return', page)
         self.assertIn("#upnext a.row:not(.seen)", page)
         a.addheaders = []
         # watch later: + on a card (asks for the new state), the button under a video, the Later page

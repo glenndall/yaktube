@@ -79,7 +79,8 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 - **Not interested:** ✕ on a video in For you / New to you hides it, and offers to hide the whole channel
   (or use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
   where you can unhide them. Your feed and search are not affected.
-- **On the TV:** when a video ends, the next "Up next" video you haven't seen starts after 10 seconds (Cancel stops it).
+- **Autoplay on the TV:** off by default. Switch on **Autoplay** in the TV player's buttons (remembered on that TV)
+  and when a video ends, the next "Up next" video you haven't seen starts after 10 seconds (Cancel stops it).
 - **History:** a video counts as watched once it has played for 10 seconds, not when you open it. Remove single
   videos or clear it all. Removing a video also removes its influence on suggestions.
 

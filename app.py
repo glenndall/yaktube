@@ -690,7 +690,7 @@ else if(Math.abs(T-sent)>=15||(!playing&&Math.abs(T-sent)>=1))send(0)}}</script>
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
 TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
 <div class="tvbar"><button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>
-<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><span id="tm" class="meta">0:00</span></div>
+<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><button id="ap">Autoplay off</button><span id="tm" class="meta">0:00</span></div>
 <div id="nx" class="tvnx" hidden><span class="meta">Up next in <span id="nxn">10</span></span><b id="nxt"></b>
 <button id="nxg">Play now</button><button id="nxc">Cancel</button></div></div>
 <script>(function(){var V="__VID__",st={t:0,d:0,s:-1},cc=false,rates=[1,1.25,1.5,2,0.75],ri=0,$=function(i){return document.getElementById(i)};
@@ -729,9 +729,13 @@ else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewi
 var bar=document.querySelector(".tvbar");[].forEach.call(document.querySelectorAll(".tvbar button,.tvnx button"),function(b){b.scrollIntoView=function(){}});
 function home(){var y=$("pl").getBoundingClientRect().top+scrollY;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
 bar.addEventListener("focusin",home);$("nx").addEventListener("focusin",home);addEventListener("load",home);
-// When a video ends: count down 10s, then play the first "Up next" video you haven't seen. Cancel stops it.
+// Autoplay (off unless switched on; remembered on this TV): when a video ends, count down 10s, then play the
+// first "Up next" video you haven't seen. Cancel stops it.
+var ap=0;try{ap=localStorage.yakap=="1"?1:0}catch(x){}
+$("ap").textContent="Autoplay "+(ap?"on":"off");
+$("ap").onclick=function(){ap=1-ap;try{localStorage.yakap=ap}catch(x){}this.textContent="Autoplay "+(ap?"on":"off");if(!ap)stopnx()};
 var nx=0;function stopnx(){clearTimeout(nx);nx=0;$("nx").hidden=true}
-function ended(){var a=document.querySelector("#upnext a.row:not(.seen)")||document.querySelector("#upnext a.row"),n=10;if(!a||nx)return;
+function ended(){var a=document.querySelector("#upnext a.row:not(.seen)")||document.querySelector("#upnext a.row"),n=10;if(!ap||!a||nx)return;
 $("nxt").textContent=a.querySelector("h3").textContent;$("nx").hidden=false;$("nxg").onclick=function(){location.href=a.href};$("nxg").focus();
 (function tick(){$("nxn").textContent=n;if(n--<=0)location.href=a.href;else nx=setTimeout(tick,1000)})()}
 $("nxc").onclick=function(){stopnx();$("pp").focus()};
