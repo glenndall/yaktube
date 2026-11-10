@@ -5,7 +5,7 @@ One file, Python standard library only. Data lives in SQLite.
 Subscriptions come from YouTube's public RSS feeds; playback uses the
 privacy-enhanced embedded player. No Google account, no API key.
 """
-import base64, functools, html, json, os, re, sqlite3, struct, threading, time, urllib.parse, urllib.request, zlib
+import base64, csv, functools, html, io, json, os, re, sqlite3, struct, threading, time, urllib.parse, urllib.request, zlib
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -43,6 +43,12 @@ CREATE TABLE IF NOT EXISTS history(
   video_id TEXT NOT NULL, watched_at INTEGER, times INTEGER DEFAULT 1,
   PRIMARY KEY(profile_id, video_id));
 CREATE INDEX IF NOT EXISTS history_time ON history(profile_id, watched_at DESC);
+CREATE TABLE IF NOT EXISTS later(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  video_id TEXT NOT NULL, added_at INTEGER, PRIMARY KEY(profile_id, video_id));
+CREATE TABLE IF NOT EXISTS hidden(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL, ref TEXT NOT NULL, added_at INTEGER, PRIMARY KEY(profile_id, kind, ref));
 CREATE TABLE IF NOT EXISTS related(src TEXT NOT NULL, video_id TEXT NOT NULL, pos INTEGER, PRIMARY KEY(src, video_id));
 CREATE TABLE IF NOT EXISTS related_src(src TEXT PRIMARY KEY, fetched_at INTEGER);
 """
@@ -62,6 +68,8 @@ def init_db():
     c.executescript(SCHEMA)
     if "feed_shorts" not in [r[1] for r in c.execute("PRAGMA table_info(profiles)")]:  # added Nov 2026
         c.execute("ALTER TABLE profiles ADD COLUMN feed_shorts INTEGER DEFAULT 1")       # Feed shows subs' Shorts
+    if "pos" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:            # added Nov 2026
+        c.execute("ALTER TABLE history ADD COLUMN pos INTEGER DEFAULT 0")                # seconds in, to resume from
     c.close()
 
 
@@ -317,6 +325,33 @@ def search(c, q):
     return vids
 
 
+def parse_channels(d, limit=3):
+    """Channels in a search page: id, name and "@handle · 399K subscribers"."""
+    out = {}
+    for r in walk(d, "channelRenderer"):
+        cid = r.get("channelId", "")
+        # YouTube keeps the handle under "subscriberCountText" and the subscribers under "videoCountText"
+        info = [r.get(k, {}).get("simpleText", "") for k in ("subscriberCountText", "videoCountText")]
+        if CID_RE.fullmatch(cid) and cid not in out:
+            out[cid] = {"id": cid, "title": r.get("title", {}).get("simpleText", "") or cid,
+                        "info": " · ".join(sorted((t for t in info if t), key=lambda t: "subscriber" in t))}
+    return list(out.values())[:limit]
+
+
+def search_channels(q):
+    # sp=EgIQAg== limits results to channels
+    _, d = yt_data("https://www.youtube.com/results?sp=EgIQAg%253D%253D&search_query=" + urllib.parse.quote_plus(q))
+    return parse_channels(d)
+
+
+def hidden_sets(c, pid):
+    """What this profile marked "not interested": (video ids, channel ids)."""
+    vids, chans = set(), set()
+    for kind, ref in c.execute("SELECT kind, ref FROM hidden WHERE profile_id=?", (pid,)):
+        (vids if kind == "v" else chans).add(ref)
+    return vids, chans
+
+
 def fetch_related(c, vid, max_age=86400):
     """Fill in a video's details and cache its 'up next' list (also feeds the For You page)."""
     row = c.execute("SELECT fetched_at FROM related_src WHERE src=?", (vid,)).fetchone()
@@ -386,6 +421,8 @@ def for_you(c, pid, limit=48):
                      "ORDER BY h.watched_at DESC LIMIT 300", (pid,)).fetchall()
     watched = {r[0] for r in c.execute("SELECT video_id FROM history WHERE profile_id=?", (pid,))}
     subs = {r[0] for r in c.execute("SELECT channel_id FROM subs WHERE profile_id=?", (pid,))}
+    no_vids, no_chans = hidden_sets(c, pid)   # "not interested"
+    watched |= no_vids
     aff = {}                                  # how much you like each channel, fading with a 30-day half-life
     for h in hist:
         if h["channel_id"]:
@@ -409,7 +446,7 @@ def for_you(c, pid, limit=48):
     out, per = [], {}
     for r in sorted(rows, key=final, reverse=True):
         k = r["channel_id"] or r["channel_title"]
-        if per.get(k, 0) < 3:                 # variety: at most 3 per channel
+        if per.get(k, 0) < 3 and r["channel_id"] not in no_chans:   # variety: at most 3 per channel
             per[k] = per.get(k, 0) + 1
             out.append(r)
             if len(out) >= limit:
@@ -429,6 +466,9 @@ def new_to_you(c, pid, limit=48):
                                 "WHERE h.profile_id=?", (pid,)):
         known.add(cid)
         known_titles.add(title)
+    no_vids, no_chans = hidden_sets(c, pid)   # "not interested"
+    watched |= no_vids
+    known |= no_chans
     known.discard(None)
     known_titles.discard("")
     known_titles.discard(None)
@@ -518,7 +558,7 @@ def tidy(c, now=None):
     c.execute(f"DELETE FROM related WHERE src IN ({stale})", (old,))
     c.execute(f"DELETE FROM related_src WHERE src IN ({stale})", (old,))
     n = c.execute(
-        "DELETE FROM videos WHERE id NOT IN (SELECT video_id FROM history) "
+        "DELETE FROM videos WHERE id NOT IN (SELECT video_id FROM history) AND id NOT IN (SELECT video_id FROM later) "
         "AND id NOT IN (SELECT video_id FROM related) AND id NOT IN (SELECT src FROM related_src) "
         "AND (CASE WHEN channel_id IN (SELECT channel_id FROM subs) THEN published < ? ELSE published < ? END)",
         (now - 365 * 86400, now - 60 * 86400)).rowcount
@@ -580,6 +620,18 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .card h3{font-size:14.5px;font-weight:600;margin:8px 0 2px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
 .card:hover h3{color:var(--accent)}
 [data-ch]:hover,a.ch:hover{color:var(--fg);text-decoration:underline}
+.th{position:relative;display:block}
+.lt,.no{position:absolute;top:6px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;
+  display:grid;place-items:center;font-size:15px;line-height:1;opacity:0;transition:opacity .12s}
+.lt{right:6px}.no{left:6px}.card:hover .lt,.card:hover .no,.lt.on{opacity:1}
+@media (hover:none){.lt,.no{opacity:.9}}
+.gone{display:grid;place-items:center;align-content:center;gap:8px;aspect-ratio:16/9;border-radius:10px;background:var(--card);
+  box-shadow:0 0 0 1px var(--line);color:var(--muted);font-size:13px;text-align:center}
+.gone b{color:var(--fg);cursor:pointer}.gone b:hover{text-decoration:underline}
+.note{background:var(--card);box-shadow:0 0 0 1px var(--line);padding:10px 14px;border-radius:10px;margin-bottom:16px}
+.imp{margin:-6px 0 18px}.imp summary{cursor:pointer}.imp form{max-width:560px;margin-top:10px}
+.imp textarea{display:block;width:100%;margin:10px 0;padding:10px 14px;border:1px solid var(--line);border-radius:12px;
+  background:var(--card);color:var(--fg);font:13px/1.4 ui-monospace,Menlo,monospace}
 .meta{color:var(--muted);font-size:13px}
 .seen img{opacity:.45}
 .empty{padding:60px 20px;text-align:center;color:var(--muted)}.empty p{max-width:460px;margin:8px auto 18px}
@@ -614,23 +666,38 @@ body{font-size:17px}header{position:static}main{padding:18px 28px 40px}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
-a[target=_blank]{display:none}
+a[target=_blank],.lt:not(.on),.no,.imp{display:none}
 .watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:100vh;overflow:hidden}.tvp{position:relative}
 .tvbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:48px 22px 18px;
 border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .5s}.tvbar.hide{opacity:0}
-.tvbar button{font:inherit;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:0;background:var(--card);color:var(--fg)}
-.tvbar button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
+.tvbar button,.tvnx button{font:inherit;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:0;background:var(--card);color:var(--fg)}
+.tvbar button:focus,.tvnx button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
+.tvnx{position:absolute;right:28px;bottom:84px;max-width:440px;padding:16px 18px;border-radius:14px;background:rgba(20,20,20,.94);box-shadow:0 0 0 1px var(--line)}
+.tvnx>b{display:block;margin:4px 0 12px;font-size:16px;line-height:1.3}.tvnx button{margin-right:8px;font-size:14px;padding:5px 14px}
 </style>"""
+# Both players call the function yakTrack() returns on every update from YouTube. A video goes into History once it
+# has really played for 10 seconds (not when its page opens); after that the position is saved every 15 seconds,
+# on pause and on leaving the page, so the video can pick up where you left off.
+TRACK_JS = """<script>function yakTrack(V){var seen=0,acc=0,prev=0,sent=-99,T=0,D=0;
+function send(n){sent=T;try{fetch("/seen",{method:"POST",keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded"},
+body:"v="+V+"&n="+n+"&t="+Math.floor(T)+"&d="+Math.floor(D)})}catch(x){}}
+addEventListener("pagehide",function(){if(seen&&T!=sent)send(0)});
+return function(t,d,playing){var now=Date.now();if(playing&&prev)acc+=Math.min(now-prev,2000);prev=playing?now:0;
+if(typeof t=="number")T=t;if(d)D=d;
+if(!seen){if(acc>=Math.min(10000,(D||60)*400)){seen=1;send(1)}}
+else if(Math.abs(T-sent)>=15||(!playing&&Math.abs(T-sent)>=1))send(0)}}</script>"""
 # TV player: the YouTube player never takes the remote's focus (it lives in a shadow root the remote
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
 TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
 <div class="tvbar"><button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>
-<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><span id="tm" class="meta">0:00</span></div></div>
+<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><span id="tm" class="meta">0:00</span></div>
+<div id="nx" class="tvnx" hidden><span class="meta">Up next in <span id="nxn">10</span></span><b id="nxt"></b>
+<button id="nxg">Play now</button><button id="nxc">Cancel</button></div></div>
 <script>(function(){var V="__VID__",st={t:0,d:0,s:-1},cc=false,rates=[1,1.25,1.5,2,0.75],ri=0,$=function(i){return document.getElementById(i)};
 // Quality: YouTube picks the picture quality from the player's size and there is no command to change it, so
 // "720p" / "480p" lay the player out smaller and stretch it back to full screen (for TVs that play the sound
 // of a 4K or 60-frames-a-second video but show no picture). The choice is remembered on this TV.
-var qw=[0,1280,854],qn=["Auto","720p","480p"],qi=0,t0=0,back=0;
+var qw=[0,1280,854],qn=["Auto","720p","480p"],qi=0,t0=__T0__,back=0,tr=yakTrack(V);
 try{qi=+localStorage.yakq||0;if(!qn[qi])qi=0;var o=(sessionStorage.yakt||"").split(":");if(o[0]==V){t0=+o[1]||0;back=1}sessionStorage.removeItem("yakt")}catch(x){}
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media; fullscreen";f.referrerPolicy="strict-origin-when-cross-origin";
 f.style.cssText="width:100%;height:100%;border:0;display:block;background:#000;transform-origin:0 0";
@@ -649,7 +716,7 @@ function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$(
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{},was=st.s;if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
 if(i.playbackQuality&&i.playbackQuality!="unknown")st.q=i.playbackQuality;
-if(st.s!=was)wake();
+if(st.s!=was){wake();if(st.s==0)ended();else if(nx)stopnx()}tr(st.t,st.d,st.s==1);
 if(!cc&&(m.event=="onReady"||(st.s==1&&!st.off))){ccoff();if(st.s==1){st.off=1;setTimeout(ccoff,1500);setTimeout(ccoff,4000)}}upd()});
 function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for good: unloadModule came back after every seek
 function toggle(){if(st.s==1||st.s==3){cmd("pauseVideo");st.s=2}else{cmd("playVideo");st.s=1}upd()}
@@ -659,9 +726,15 @@ $("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("set
 $("sp").onclick=function(){ri=(ri+1)%rates.length;cmd("setPlaybackRate",[rates[ri]]);this.textContent="Speed "+rates[ri]+"×"};
 addEventListener("keydown",function(k){var c=k.key;if(c=="MediaPlayPause"||c=="MediaPlay"||c=="MediaPause"){toggle();k.preventDefault()}
 else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewind"){seek(-10);k.preventDefault()}});
-var bar=document.querySelector(".tvbar");[].forEach.call(bar.querySelectorAll("button"),function(b){b.scrollIntoView=function(){}});
+var bar=document.querySelector(".tvbar");[].forEach.call(document.querySelectorAll(".tvbar button,.tvnx button"),function(b){b.scrollIntoView=function(){}});
 function home(){var y=$("pl").getBoundingClientRect().top+scrollY;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
-bar.addEventListener("focusin",home);addEventListener("load",home);
+bar.addEventListener("focusin",home);$("nx").addEventListener("focusin",home);addEventListener("load",home);
+// When a video ends: count down 10s, then play the first "Up next" video you haven't seen. Cancel stops it.
+var nx=0;function stopnx(){clearTimeout(nx);nx=0;$("nx").hidden=true}
+function ended(){var a=document.querySelector("#upnext a.row:not(.seen)")||document.querySelector("#upnext a.row"),n=10;if(!a||nx)return;
+$("nxt").textContent=a.querySelector("h3").textContent;$("nx").hidden=false;$("nxg").onclick=function(){location.href=a.href};$("nxg").focus();
+(function tick(){$("nxn").textContent=n;if(n--<=0)location.href=a.href;else nx=setTimeout(tick,1000)})()}
+$("nxc").onclick=function(){stopnx();$("pp").focus()};
 // The buttons fade out after 5s of no remote presses while playing; the next press only brings them back
 // (so OK doesn't also pause). Play/pause and fast-forward/rewind keys always act straight away.
 var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
@@ -690,9 +763,9 @@ return{st:st,cmd:cmd}}</script>"""
 EMBED = "https://www.youtube-nocookie.com/embed/"
 WEB_PLAYER = """<div class="pw"><iframe id="yt" class="player" allow="autoplay; encrypted-media; picture-in-picture; fullscreen"
 allowfullscreen referrerpolicy="strict-origin-when-cross-origin"></iframe></div>
-""" + YT_JS + """<script>(function(){var f=document.getElementById("yt");
-f.src="https://www.youtube-nocookie.com/embed/__VID__?autoplay=1&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&origin="+encodeURIComponent(location.origin);
-yakPlayer(f,null,1)})()</script>"""
+""" + YT_JS + TRACK_JS + """<script>(function(){var f=document.getElementById("yt");
+f.src="https://www.youtube-nocookie.com/embed/__VID__?autoplay=1&rel=0&modestbranding=1&playsinline=1&enablejsapi=1&start=__T0__&origin="+encodeURIComponent(location.origin);
+var tr=yakTrack("__VID__");yakPlayer(f,function(st,m){var i=m.info||{};tr(i.currentTime,i.duration,st.s==1)},1)})()</script>"""
 
 # Shorts: full screen, one at a time, loops. Swipe up (or wheel / Down arrow / the TV remote's Down) for the next one,
 # tap (or OK) to pause. A see-through layer over the player catches the swipes; the player itself never gets touched.
@@ -802,7 +875,7 @@ def thumb(vid):
     return f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
 
 
-def card(v, seen=False):
+def card(v, seen=False, saved=False, hide=False):
     short = "short" in v.keys() and v["short"]
     meta = " · ".join(x for x in ("Short" if short else "", views(v["views"]), ago(v["published"])) if x)
     href = ("/shorts?v=" if short else "/watch?v=") + v["id"]   # Shorts open in the full-screen Shorts player
@@ -810,15 +883,44 @@ def card(v, seen=False):
     # so the TV remote still steps from video to video
     cid = v["channel_id"] if "channel_id" in v.keys() else None
     ch = f'<span data-ch="{cid}">{e(v["channel_title"] or "")}</span>' if cid and CID_RE.fullmatch(cid) else e(v["channel_title"] or "")
+    extra = "" if short else (f'<span class="lt{" on" if saved else ""}" data-lt="{v["id"]}" title="Watch later">{"✓" if saved else "＋"}</span>'
+                              + (f'<span class="no" data-no="{v["id"]}" title="Not interested">✕</span>' if hide else ""))
     return (f'<a class="card{" seen" if seen else ""}" href="{href}">'
-            f'<img loading="lazy" src="{thumb(v["id"])}" alt=""><h3>{e(v["title"] or v["id"])}</h3>'
+            f'<span class="th"><img loading="lazy" src="{thumb(v["id"])}" alt="">{extra}</span><h3>{e(v["title"] or v["id"])}</h3>'
             f'<div class="meta">{ch}</div><div class="meta">{meta}</div></a>')
+
+
+def sub_button(cid, subbed, nxt):
+    """Subscribe / Subscribed button for a channel; `nxt` is the page to come back to."""
+    if subbed:
+        return (f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{cid}">'
+                f'<input type="hidden" name="next" value="{e(nxt)}"><button class="btn ghost small">Subscribed ✓</button></form>')
+    return (f'<form method="post" action="/subs/add"><input type="hidden" name="url" value="{cid}">'
+            f'<input type="hidden" name="next" value="{e(nxt)}"><button class="btn small">Subscribe</button></form>')
 
 
 def side_row(r, seen=False):
     meta = " · ".join(x for x in (r["channel_title"] or "", views(r["views"]), ago(r["published"])) if x)
     return (f'<a class="row{" seen" if seen else ""}" href="/watch?v={r["id"]}"><img loading="lazy" src="{thumb(r["id"])}" alt="">'
             f'<div><h3>{e(r["title"] or r["id"])}</h3><div class="meta">{e(meta)}</div></div></a>')
+
+
+# One small script on every page: "/" jumps to the search box, and the bits of a video card that aren't links of
+# their own (so the TV remote still steps from video to video) react to a click or tap: the channel name opens its
+# page, + saves for later, x means "not interested".
+PAGE_JS = """<script>addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))
+{k.preventDefault();document.querySelector(".go input").focus()}});
+addEventListener("click",k=>{var t=k.target,c;if(!t.closest)return;
+function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b}).then(r=>r.text())}
+if(c=t.closest("[data-lt]")){k.preventDefault();post("/later/toggle","v="+c.dataset.lt).then(s=>{c.classList.toggle("on",s=="1");c.textContent=s=="1"?"\u2713":"\uff0b"})}
+else if(c=t.closest("[data-no]")){k.preventDefault();var a=c.closest(".card"),ch=a.querySelector("[data-ch]"),g=document.createElement("div");
+g.className="gone";g.card=a;g.innerHTML="<span>Hidden from your suggestions</span>"+(ch?"<b data-hc='"+ch.dataset.ch+"'>Hide this whole channel</b>":"")+"<b data-un='"+c.dataset.no+"'>Undo</b>";
+post("/hide","v="+c.dataset.no);a.style.display="none";a.after(g)}
+else if(c=t.closest("[data-hc]")){var g=c.parentNode;g.hc=c.dataset.hc;post("/hide","c="+g.hc);c.replaceWith("Channel hidden too");
+document.querySelectorAll('.card [data-ch="'+g.hc+'"]').forEach(x=>{x.closest(".card").style.display="none"})}
+else if(c=t.closest("[data-un]")){var g=c.parentNode;post("/hide","undo=1&v="+c.dataset.un+(g.hc?"&c="+g.hc:"")).then(()=>{if(g.hc)location.reload();else{g.card.style.display="";g.remove()}})}
+else if(c=t.closest("[data-ch]")){k.preventDefault();location.href="/channel?id="+c.dataset.ch}});
+var t=document.querySelector("nav .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script>"""
 
 
 def layout(title, body, prof=None, tab="", q=""):
@@ -831,19 +933,14 @@ def layout(title, body, prof=None, tab="", q=""):
     if not prof:
         return head + f'<main>{body}</main></body></html>'
     tabs = "".join(f'<a href="{h}" class="{"on" if tab == k else ""}">{n}</a>'
-                   for k, h, n in (("feed", "/", "Feed"), ("fy", "/foryou", "For you"), ("new", "/new", "New to you"), ("shorts", "/shorts", "Shorts"), ("subs", "/subs", "Subscriptions"), ("hist", "/history", "History")))
+                   for k, h, n in (("feed", "/", "Feed"), ("fy", "/foryou", "For you"), ("new", "/new", "New to you"), ("shorts", "/shorts", "Shorts"), ("later", "/later", "Later"), ("subs", "/subs", "Subscriptions"), ("hist", "/history", "History")))
     return head + (
         f'<header><a class="logo" href="/">Yak<b>Tube</b></a><nav>{tabs}</nav>'
         f'<form class="go" action="/go"><input type="text" name="q" placeholder="Search, or paste a YouTube link…" '
         f'autocomplete="off" value="{e(q)}"></form>'
         f'<a href="/profiles" title="Switch profile ({e(prof["name"])})" class="av" style="background:{prof["color"]}">'
         f'{e(prof["name"][:1].upper())}</a></header><main>{body}</main>'
-        # press "/" anywhere to jump to the search box
-        '<script>addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))'
-        '{k.preventDefault();document.querySelector(".go input").focus()}});'
-        'addEventListener("click",k=>{var c=k.target.closest&&k.target.closest("[data-ch]");'
-        'if(c){k.preventDefault();location.href="/channel?id="+c.dataset.ch}});'
-        'var t=document.querySelector("nav .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script></body></html>')
+        + PAGE_JS + '</body></html>')
 
 
 # ---------------------------------------------------------------- server
@@ -877,6 +974,18 @@ class App(BaseHTTPRequestHandler):
             return self.db.execute("SELECT * FROM profiles WHERE id=?", (int(ck["yak_profile"].value),)).fetchone()
         return None
 
+    def card(self, v, seen=False, hide=False):
+        if self._later is None:                              # this profile's Watch later list, read once per page
+            self._later = {r[0] for r in self.db.execute("SELECT video_id FROM later WHERE profile_id=?", (self.prof["id"],))}
+        return card(v, seen, v["id"] in self._later, hide)
+
+    def back(self, f, fallback=None):
+        """After a form: go back to the page it came from (only ever a path on this site)."""
+        nxt = f.get("next", "")
+        if nxt.startswith("/") and not nxt.startswith("//"):
+            return self.redirect(nxt)
+        return self.redirect(fallback) if fallback else self.send("", 204)
+
     def log_message(self, fmt, *args):
         pass
 
@@ -889,6 +998,7 @@ class App(BaseHTTPRequestHandler):
     def route(self, method):
         u = urllib.parse.urlsplit(self.path)
         self.q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
+        self._later = None
         self.db = connect()
         try:
             if u.path == "/healthz":
@@ -908,6 +1018,8 @@ class App(BaseHTTPRequestHandler):
                 return self.redirect("/profiles")
             h = {("GET", "/"): self.feed, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
                  ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add, ("GET", "/channel"): self.channel,
+                 ("POST", "/subs/import"): self.sub_import, ("GET", "/subs/export"): self.sub_export,
+                 ("GET", "/later"): self.later, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): self.foryou, ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
@@ -968,7 +1080,7 @@ class App(BaseHTTPRequestHandler):
             "ORDER BY v.published DESC LIMIT ? OFFSET ?",
             (pid, pid, on, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)).fetchall()
         more = len(rows) > PAGE_SIZE
-        grid = "".join(card(v, v["seen"]) for v in rows[:PAGE_SIZE])
+        grid = "".join(self.card(v, v["seen"]) for v in rows[:PAGE_SIZE])
         body = (f'<div class="bar"><h1>Latest from your subscriptions</h1>'
                 f'<div class="acts"><form method="post" action="/feed/shorts"><button class="btn ghost small sw{" on" if on else ""}" role="switch" '
                 f'aria-checked="{"true" if on else "false"}" title="Show Shorts from your subscriptions">Shorts<i></i></button></form>'
@@ -986,7 +1098,7 @@ class App(BaseHTTPRequestHandler):
                     'computer from your own history.</p><a class="btn" href="/">Back to your feed</a></div>')
         else:
             body = (f'<div class="bar"><h1>For you</h1><span class="meta">Based on what you\'ve watched</span></div>'
-                    f'<div class="grid">{"".join(card(r) for r in rows)}</div>')
+                    f'<div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
         self.send(layout("For you", body, self.prof, "fy"))
 
     def newtoyou(self):
@@ -999,7 +1111,7 @@ class App(BaseHTTPRequestHandler):
                     '<a class="btn" href="/">Back to your feed</a></div>')
         else:
             body = (f'<div class="bar"><h1>New to you</h1><span class="meta">Channels you haven\'t watched yet · '
-                    f'grows as you explore</span></div><div class="grid">{"".join(card(r) for r in rows)}</div>')
+                    f'grows as you explore</span></div><div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
         self.send(layout("New to you", body, self.prof, "new"))
 
     def shorts(self):
@@ -1017,11 +1129,57 @@ class App(BaseHTTPRequestHandler):
         self.send(layout("Shorts", body))
 
     def seen(self):
-        vid = self.form().get("v", "")
+        """The players report here. n=1 (or nothing, as Shorts send) puts the video in History; t and d are how far in
+        and how long, saved so the video can resume. A video watched to the end starts over and leaves Watch later."""
+        f, pid = self.form(), self.prof["id"]
+        vid = f.get("v", "")
         if VID_RE.match(vid):
-            ensure_video(self.db, vid)
-            mark_watched(self.db, self.prof["id"], vid)
+            t, d = (int(f[k]) if f.get(k, "").isdigit() else 0 for k in ("t", "d"))
+            if f.get("n", "1") != "0":
+                ensure_video(self.db, vid)
+                mark_watched(self.db, pid, vid)
+            done = d > 0 and t >= d - max(10, d // 20)
+            self.db.execute("UPDATE history SET pos=? WHERE profile_id=? AND video_id=?", (0 if done or t < 5 else t, pid, vid))
+            if done:
+                self.db.execute("DELETE FROM later WHERE profile_id=? AND video_id=?", (pid, vid))
         self.send("", 204)
+
+    # -- watch later, not interested
+    def later(self):
+        rows = self.db.execute(
+            "SELECT v.*, h.video_id AS seen FROM later l JOIN videos v ON v.id=l.video_id "
+            "LEFT JOIN history h ON h.video_id=v.id AND h.profile_id=l.profile_id WHERE l.profile_id=? "
+            "ORDER BY l.added_at DESC, l.rowid DESC", (self.prof["id"],)).fetchall()
+        if rows:
+            body = (f'<div class="bar"><h1>Watch later</h1><span class="meta">Leaves the list once you\'ve watched it to the end</span></div>'
+                    f'<div class="grid">{"".join(self.card(r, r["seen"]) for r in rows)}</div>')
+        else:
+            body = ('<div class="empty"><h1>Nothing saved yet</h1><p>Use ＋ on a video\'s picture, or the Watch later button '
+                    'under a video, to keep it here for another time.</p><a class="btn" href="/">Back to your feed</a></div>')
+        self.send(layout("Watch later", body, self.prof, "later"))
+
+    def later_toggle(self):
+        f, pid, on = self.form(), self.prof["id"], 0
+        vid = f.get("v", "")
+        if VID_RE.match(vid) and not self.db.execute("DELETE FROM later WHERE profile_id=? AND video_id=?", (pid, vid)).rowcount:
+            ensure_video(self.db, vid)
+            self.db.execute("INSERT INTO later(profile_id,video_id,added_at) VALUES(?,?,?)", (pid, vid, int(time.time())))
+            on = 1
+        if f.get("next"):
+            return self.back(f, "/later")
+        self.send(str(on), ctype="text/plain")              # the + on a video card asks for the new state
+
+    def hide(self):
+        """Not interested: v = a video, c = a whole channel; undo=1 takes it back. Only affects For you / New to you."""
+        f, pid = self.form(), self.prof["id"]
+        for kind, ref, ok in (("v", f.get("v", ""), VID_RE), ("c", f.get("c", ""), CID_RE)):
+            if ok.fullmatch(ref):
+                if f.get("undo"):
+                    self.db.execute("DELETE FROM hidden WHERE profile_id=? AND kind=? AND ref=?", (pid, kind, ref))
+                else:
+                    self.db.execute("INSERT OR IGNORE INTO hidden(profile_id,kind,ref,added_at) VALUES(?,?,?,?)",
+                                    (pid, kind, ref, int(time.time())))
+        self.back(f)
 
     def feed_shorts(self):
         self.db.execute("UPDATE profiles SET feed_shorts=1-COALESCE(feed_shorts,1) WHERE id=?", (self.prof["id"],))
@@ -1045,15 +1203,30 @@ class App(BaseHTTPRequestHandler):
         q = self.q.get("q", "").strip()[:200]
         if not q:
             return self.redirect("/")
+        pool = ThreadPoolExecutor(1)
+        chans = pool.submit(search_channels, q)              # looked up while the videos load
         try:
             vids = search(self.db, q)
             err = ""
         except Exception as ex:
             print("[search]", repr(ex))
             vids, err = [], "Search isn't working right now (YouTube may have changed something). Pasting a link still works."
+        try:
+            chans = chans.result()
+        except Exception as ex:
+            print("[search channels]", repr(ex))
+            chans = []
+        pool.shutdown(wait=False)
+        subbed = {r[0] for r in self.db.execute("SELECT channel_id FROM subs WHERE profile_id=?", (self.prof["id"],))}
+        nxt = "/search?q=" + urllib.parse.quote(q)
+        found = "".join(
+            f'<div><div class="av" style="background:{COLORS[sum(map(ord, ch["id"])) % len(COLORS)]}">{e(ch["title"][:1].upper())}</div>'
+            f'<div class="grow"><a class="ch" href="/channel?id={ch["id"]}"><strong>{e(ch["title"])}</strong></a>'
+            f'<div class="meta">{e(ch["info"])}</div></div>{sub_button(ch["id"], ch["id"] in subbed, nxt)}</div>' for ch in chans)
         seen = {r[0] for r in self.db.execute("SELECT video_id FROM history WHERE profile_id=?", (self.prof["id"],))}
-        grid = "".join(card(v, v["id"] in seen) for v in vids)
+        grid = "".join(self.card(v, v["id"] in seen) for v in vids)
         body = (f'<h1>Results for “{e(q)}”</h1>' + (f'<div class="err">{e(err)}</div>' if err else "")
+                + (f'<div class="list" style="margin-bottom:22px">{found}</div>' if found else "")
                 + (f'<div class="grid">{grid}</div>' if grid else ("" if err else '<p class="meta">No videos found.</p>')))
         self.send(layout(q, body, self.prof, q=q))
 
@@ -1075,7 +1248,12 @@ class App(BaseHTTPRequestHandler):
             return self.redirect("/")
         pid = self.prof["id"]
         v = ensure_video(self.db, vid)
-        mark_watched(self.db, pid, vid)
+        at = self.db.execute("SELECT pos FROM history WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
+        t0 = str(at["pos"] or 0) if at else "0"              # pick up where this profile left off
+        saved = self.db.execute("SELECT 1 FROM later WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
+        sub_later = (f'<form method="post" action="/later/toggle"><input type="hidden" name="v" value="{vid}">'
+                     f'<input type="hidden" name="next" value="/watch?v={vid}">'
+                     f'<button class="btn ghost small">{"Saved ✓" if saved else "Watch later"}</button></form>')
         subbed = v["channel_id"] and self.db.execute(
             "SELECT 1 FROM subs WHERE profile_id=? AND channel_id=?", (pid, v["channel_id"])).fetchone()
         nxt = e("/watch?v=" + vid)
@@ -1098,12 +1276,12 @@ class App(BaseHTTPRequestHandler):
         if v["channel_id"] or v["channel_url"]:              # opens the channel page
             chan = f'<a class="ch" href="/channel?id={urllib.parse.quote(v["channel_id"] or v["channel_url"], safe="")}">{chan}</a>'
         if "YakTubeTV" in self.headers.get("User-Agent", ""):
-            player = TV_PLAYER.replace("__VID__", vid)
+            player = TRACK_JS + TV_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
         else:
-            player = WEB_PLAYER.replace("__VID__", vid)
+            player = WEB_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
         body = (f'<div class="watch"><div>{player}'
                 f'<h1>{e(v["title"] or "Video")}</h1>'
-                f'<div class="bar">{chan}{sub}'
+                f'<div class="bar">{chan}{sub}{sub_later}'
                 f'<span class="meta" style="margin-left:auto">{meta}</span>'
                 f'<a class="meta" href="https://www.youtube.com/watch?v={vid}" target="_blank" rel="noopener">Open on YouTube ↗</a></div></div>'
                 f'<aside><h3 style="margin-top:0">Up next</h3><div id="upnext"><p class="meta">Loading…</p></div>'
@@ -1128,12 +1306,33 @@ class App(BaseHTTPRequestHandler):
             f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{r["id"]}">'
             f'<button class="btn ghost small">Unsubscribe</button></form></div>' for r in rows)
         pre = e(self.q.get("add", ""))
+        got = self.q.get("imported", "")
+        note = (f'<div class="note">Added {int(got)} new subscription{"" if got == "1" else "s"} '
+                f'({int(self.q["of"]) if self.q.get("of", "").isdigit() else got} channels found). '
+                f'Their names and videos fill in over the next few minutes.</div>' if got.isdigit() else "")
+        off = self.db.execute(
+            "SELECT h.ref, COALESCE((SELECT title FROM channels WHERE id=h.ref), (SELECT channel_title FROM videos WHERE "
+            "channel_id=h.ref AND channel_title!='' LIMIT 1), h.ref) AS title FROM hidden h WHERE h.profile_id=? AND h.kind='c' "
+            "ORDER BY title COLLATE NOCASE", (pid,)).fetchall()
+        hidden = "".join(
+            f'<div><div class="grow"><a class="ch" href="/channel?id={r["ref"]}"><strong>{e(r["title"])}</strong></a></div>'
+            f'<form method="post" action="/hide"><input type="hidden" name="c" value="{r["ref"]}"><input type="hidden" name="undo" value="1">'
+            f'<input type="hidden" name="next" value="/subs"><button class="btn ghost small">Unhide</button></form></div>' for r in off)
+        port = ('<details class="imp"><summary class="meta">Import or export subscriptions</summary>'
+                '<form method="post" action="/subs/import"><p class="meta">From YouTube: Google Takeout → “YouTube and YouTube Music” → '
+                'subscriptions → <b>subscriptions.csv</b>. Choose that file, or paste any list of channel links. '
+                'Export saves this profile\'s list in the same format (handy for copying it to another profile).</p>'
+                '<input type="file" accept=".csv,.txt,.opml,.xml,text/*" onchange="var r=new FileReader(),t=this.form.text;'
+                'r.onload=function(){t.value=r.result};r.readAsText(this.files[0])">'
+                '<textarea name="text" rows="5" required placeholder="Channel Id,Channel Url,Channel Title"></textarea>'
+                '<button class="btn small">Import</button> <a class="btn ghost small" href="/subs/export">Export</a></form></details>')
         body = (f'<h1>Subscriptions <span class="meta">({len(rows)})</span></h1>'
-                + (f'<div class="err">{e(err)}</div>' if err else "")
+                + (f'<div class="err">{e(err)}</div>' if err else "") + note
                 + f'<form method="post" action="/subs/add" class="bar"><input type="text" name="url" value="{pre}" required '
                   f'placeholder="Channel link, @handle, or any video link from the channel" style="flex:1;max-width:560px">'
-                  f'<button class="btn">Subscribe</button></form>'
-                + (f'<div class="list">{items}</div>' if rows else '<p class="meta">No subscriptions yet.</p>'))
+                  f'<button class="btn">Subscribe</button></form>' + port
+                + (f'<div class="list">{items}</div>' if rows else '<p class="meta">No subscriptions yet.</p>')
+                + (f'<h3 style="margin:28px 0 12px">Hidden from suggestions</h3><div class="list">{hidden}</div>' if hidden else ""))
         self.send(layout("Subscriptions", body, self.prof, "subs"))
 
     def channel(self):
@@ -1162,15 +1361,15 @@ class App(BaseHTTPRequestHandler):
             "WHERE v.channel_id=? ORDER BY v.published DESC LIMIT ? OFFSET ?",
             (pid, cid, PAGE_SIZE + 1, (page - 1) * PAGE_SIZE)).fetchall()
         title = ch["title"] if ch else next((r["channel_title"] for r in rows if r["channel_title"]), "Channel")
-        nxt = e(f"/channel?id={cid}")
-        if self.db.execute("SELECT 1 FROM subs WHERE profile_id=? AND channel_id=?", (pid, cid)).fetchone():
-            sub = (f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{cid}">'
-                   f'<input type="hidden" name="next" value="{nxt}"><button class="btn ghost small">Subscribed ✓</button></form>')
-        else:
-            sub = (f'<form method="post" action="/subs/add"><input type="hidden" name="url" value="{cid}">'
-                   f'<input type="hidden" name="next" value="{nxt}"><button class="btn small">Subscribe</button></form>')
+        nxt = f"/channel?id={cid}"
+        sub = sub_button(cid, self.db.execute("SELECT 1 FROM subs WHERE profile_id=? AND channel_id=?", (pid, cid)).fetchone(), nxt)
+        off = self.db.execute("SELECT 1 FROM hidden WHERE profile_id=? AND kind='c' AND ref=?", (pid, cid)).fetchone()
+        sub += (f'<form method="post" action="/hide"><input type="hidden" name="c" value="{cid}">'
+                f'<input type="hidden" name="next" value="{nxt}">{"<input type=hidden name=undo value=1>" if off else ""}'
+                f'<button class="btn ghost small" title="Keeps this channel out of For you and New to you">'
+                f'{"Hidden from suggestions ✓" if off else "Hide from suggestions"}</button></form>')
         more = len(rows) > PAGE_SIZE
-        grid = "".join(card(v, v["seen"]) for v in rows[:PAGE_SIZE])
+        grid = "".join(self.card(v, v["seen"]) for v in rows[:PAGE_SIZE])
         body = (f'<div class="bar"><h1>{e(title)}</h1><div class="acts">{sub}</div>'
                 f'<a class="meta" href="https://www.youtube.com/channel/{cid}" target="_blank" rel="noopener">YouTube ↗</a></div>'
                 + (f'<div class="err">{e(err)}</div>' if err else "")
@@ -1191,6 +1390,35 @@ class App(BaseHTTPRequestHandler):
             self.db.execute("UPDATE videos SET channel_id=? WHERE id=? AND channel_id IS NULL", (cid, f["v"]))
         nxt = f.get("next", "")
         self.redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else "/subs")
+
+    def sub_import(self):
+        """Subscribe to every channel id in a pasted list: YouTube's Takeout subscriptions.csv, an OPML file, or plain links."""
+        text, pid, now = self.form().get("text", ""), self.prof["id"], int(time.time())
+        titles = {}
+        try:
+            for row in csv.reader(io.StringIO(text)):       # Takeout: Channel Id, Channel Url, Channel Title
+                if len(row) > 2 and CID_RE.fullmatch(row[0].strip()):
+                    titles[row[0].strip()] = row[2].strip()
+        except csv.Error:
+            pass
+        ids = list(dict.fromkeys(re.findall(r"(?<![\w-])UC[\w-]{22}(?![\w-])", text)))[:2000]
+        count = lambda: self.db.execute("SELECT COUNT(*) FROM subs WHERE profile_id=?", (pid,)).fetchone()[0]
+        before = count()
+        for cid in ids:                                     # fetched_at=0: the refresher picks them up straight away
+            self.db.execute("INSERT OR IGNORE INTO channels(id,title,fetched_at) VALUES(?,?,0)", (cid, titles.get(cid) or cid))
+            self.db.execute("INSERT OR IGNORE INTO subs(profile_id,channel_id,added_at) VALUES(?,?,?)", (pid, cid, now))
+        threading.Thread(target=refresh_stale, daemon=True).start()
+        self.redirect(f"/subs?imported={count() - before}&of={len(ids)}")
+
+    def sub_export(self):
+        out = io.StringIO()
+        w = csv.writer(out)
+        w.writerow(["Channel Id", "Channel Url", "Channel Title"])
+        for r in self.db.execute("SELECT ch.id, ch.title FROM subs s JOIN channels ch ON ch.id=s.channel_id WHERE s.profile_id=? "
+                                 "ORDER BY ch.title COLLATE NOCASE", (self.prof["id"],)):
+            w.writerow([r["id"], "http://www.youtube.com/channel/" + r["id"], r["title"]])
+        self.send(out.getvalue(), ctype="text/csv; charset=utf-8",
+                  headers=[("Content-Disposition", 'attachment; filename="subscriptions.csv"')])
 
     def sub_remove(self):
         f = self.form()

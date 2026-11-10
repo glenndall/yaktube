@@ -1,6 +1,6 @@
 # YakTube
 
-A tiny self-hosted YouTube portal: profiles, subscriptions, search, "For you" suggestions, watch history.
+A tiny self-hosted YouTube portal: profiles, subscriptions, search, "For you" suggestions, watch later, watch history.
 No Google account, no API key, no dependencies: one Python file plus one SQLite database.
 
 ## Run it
@@ -53,7 +53,15 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 ## Using it
 - **Profiles:** "Who's watching?" Each profile has its own subscriptions, history and suggestions.
 - **Search bar:** type words to search, or paste any YouTube link to watch it. Press `/` to jump there.
-- **Subscribe:** the button on any watch page, or paste a channel link / `@handle` on the Subscriptions page.
+  Channels that match show above the videos, each with a Subscribe button.
+- **Subscribe:** the button on any watch page, channel page or search result, or paste a channel link / `@handle`
+  on the Subscriptions page.
+- **Bring your YouTube subscriptions:** Subscriptions → *Import or export subscriptions*. Choose the
+  `subscriptions.csv` from Google Takeout (YouTube and YouTube Music → subscriptions), or paste any list of channel
+  links. Export saves a profile's list in the same format, e.g. to copy it to another profile.
+- **Watch later:** ＋ on a video's picture, or the Watch later button under a video, saves it to the **Later** tab.
+  It leaves the list once you've watched it to the end.
+- **Picks up where you left off:** a video you stopped part-way resumes from there, for each profile.
 - **Channel pages:** click a channel's name (under any video, on a watch page, or in Subscriptions) to see its
   newest ~30 videos and subscribe or unsubscribe there. On the TV, open a video and pick the channel name below it.
 - **Feed:** newest uploads from your subscriptions. The **Shorts** switch (next to Refresh) hides or shows their Shorts.
@@ -68,7 +76,12 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 - **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, the
   **Quality** button switches Auto → 720p → 480p (remembered on that TV); the time display shows what's playing.
 - **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
-- **History:** remove single videos or clear it all. Removing a video also removes its influence on suggestions.
+- **Not interested:** ✕ on a video in For you / New to you hides it, and offers to hide the whole channel
+  (or use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
+  where you can unhide them. Your feed and search are not affected.
+- **On the TV:** when a video ends, the next "Up next" video you haven't seen starts after 10 seconds (Cancel stops it).
+- **History:** a video counts as watched once it has played for 10 seconds, not when you open it. Remove single
+  videos or clear it all. Removing a video also removes its influence on suggestions.
 
 ## How it works
 - **Subscriptions:** each channel's public RSS feed. If YouTube's RSS is down (it is as of Nov 2026),

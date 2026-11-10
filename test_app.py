@@ -26,6 +26,8 @@ def page(data, extra=""): return extra + "<script>var ytInitialData = " + _j.dum
 SEARCH = {"contents": [{"videoRenderer": {"videoId": "srch0000001", "title": {"runs": [{"text": "Apple II <story>"}]},
           "longBylineText": {"runs": [{"text": "Retro", "navigationEndpoint": {"browseEndpoint": {"browseId": CID2}}}]},
           "publishedTimeText": {"simpleText": "13y ago"}, "viewCountText": {"simpleText": "17,872 views"}}},
+          {"channelRenderer": {"channelId": CID2, "title": {"simpleText": "Retro & Co"},   # YouTube's odd field names
+           "subscriberCountText": {"simpleText": "@retro"}, "videoCountText": {"simpleText": "12K subscribers"}}},
           {"shortsLockupViewModel": {"x": 1}}, {"lockupViewModel": {"contentId": "PLx", "contentType": "LOCKUP_CONTENT_TYPE_PLAYLIST"}}]}
 RELATED = [lockup(f"rel{i:08d}", f"Related {i}", "Retro", CID2) for i in range(3)] + [lockup("vid00000001", "Video 1", "Woz", CID)]
 
@@ -61,6 +63,12 @@ class T(unittest.TestCase):
         r = op.open(self.base + path, body)
         return r.status, r.geturl(), r.read().decode()
 
+    def play(self, op, vid, t=30, d=600):
+        """Open a video and report what the player reports once it has really played."""
+        page = self.get(op, "/watch?v=" + vid)[2]
+        op.open(self.base + "/seen", f"v={vid}&n=1&t={t}&d={d}".encode())
+        return page
+
     def login(self, name):
         op = self.client()
         self.get(op, "/profiles/add", {"name": name})
@@ -92,7 +100,10 @@ class T(unittest.TestCase):
         self.assertIn("youtube-nocookie.com/embed/vid00000002", page)
         self.assertIn("Subscribed ✓", page)
         self.assertIn("More from this channel", page)
-        self.get(a, "/watch?v=vid00000002")
+        _, _, page = self.get(a, "/")
+        self.assertNotIn('card seen"', page)                          # opening a video isn't watching it
+        self.assertIn("Nothing watched yet", self.get(a, "/history")[2])
+        self.play(a, "vid00000002"); self.play(a, "vid00000002")
         _, _, page = self.get(a, "/")
         self.assertIn('card seen" href="/watch?v=vid00000002', page)  # watched videos dimmed
         _, _, page = self.get(a, "/history")
@@ -186,6 +197,7 @@ class T(unittest.TestCase):
         self.assertIn(f'data-ch="{CID}"', self.get(a, "/")[2])
         self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/watch?v=vid00000002")[2])
         self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/subs")[2])
+        self.play(a, "vid00000002")
         self.assertIn('card seen" href="/watch?v=vid00000002', self.get(a, "/channel?id=" + CID)[2])
         # a handle is looked up; works with the feed down; cached pages need no network; junk is a tidy 404
         self.assertTrue(self.get(a, "/channel?id=%40woz")[1].endswith("/channel?id=" + CID))
@@ -201,16 +213,96 @@ class T(unittest.TestCase):
         try: self.get(a, "/channel?id=" + urllib.parse.quote("<script>")); self.fail()
         except urllib.error.HTTPError as ex: self.assertEqual(ex.code, 404)
 
+    def test_15_upgrades(self):
+        a = self.login("Up")
+        post = lambda path, body: a.open(self.base + path, body.encode()).read().decode()
+        # resume: a video picks up where this profile left off; watched to the end, it starts over
+        self.assertIn("&start=0&", self.get(a, "/watch?v=vid00000002")[2])
+        self.play(a, "vid00000002", t=10)
+        post("/seen", "v=vid00000002&n=0&t=125&d=600")
+        self.assertIn("&start=125&", self.get(a, "/watch?v=vid00000002")[2])
+        db = app.connect()
+        times = lambda: db.execute("SELECT times FROM history WHERE video_id='vid00000002' AND profile_id="
+                                   "(SELECT id FROM profiles WHERE name='Up')").fetchone()[0]
+        self.assertEqual(times(), 1)                                   # position reports aren't extra watches
+        a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
+        page = self.get(a, "/watch?v=vid00000002")[2]
+        self.assertIn("t0=125,", page)                                 # the TV player resumes too
+        self.assertIn('id="nxg">Play now', page)                       # ...and offers the next video when one ends
+        self.assertIn("#upnext a.row:not(.seen)", page)
+        a.addheaders = []
+        # watch later: + on a card (asks for the new state), the button under a video, the Later page
+        self.assertIn("Nothing saved yet", self.get(a, "/later")[2])
+        self.get(a, "/subs/add", {"url": CID})
+        self.assertIn('class="lt" data-lt="vid00000004"', self.get(a, "/")[2])
+        self.assertEqual(post("/later/toggle", "v=vid00000004"), "1")
+        self.assertIn('class="lt on" data-lt="vid00000004"', self.get(a, "/")[2])
+        _, url, page = self.get(a, "/later/toggle", {"v": "vid00000002", "next": "/watch?v=vid00000002"})
+        self.assertIn("/watch?v=vid00000002", url)
+        self.assertIn("Saved ✓", page)
+        page = self.get(a, "/later")[2]
+        self.assertLess(page.index("Video 2"), page.index("Video 4"))  # newest save first
+        self.assertEqual(post("/later/toggle", "v=vid00000004"), "0")  # again takes it off
+        post("/seen", "v=vid00000002&n=0&t=595&d=600")                 # watched to the end: leaves the list...
+        self.assertIn("Nothing saved yet", self.get(a, "/later")[2])
+        self.assertIn("&start=0&", self.get(a, "/watch?v=vid00000002")[2])   # ...and starts over next time
+        self.assertEqual(post("/later/toggle", "v=bad"), "0")
+        # search shows matching channels, with a Subscribe button that comes back to the results
+        page = self.get(a, "/search?q=retro")[2]
+        self.assertIn(f'href="/channel?id={CID2}"><strong>Retro &amp; Co</strong>', page)
+        self.assertIn("@retro · 12K subscribers", page)
+        self.assertIn('name="next" value="/search?q=retro"', page)
+        self.assertEqual(app.parse_channels({"x": [{"channelRenderer": {"channelId": "nope"}}]}), [])
+        # not interested: a video, then its whole channel, leave For you; undo brings them back
+        self.play(a, "srch0000001")
+        self.get(a, "/related?v=srch0000001")
+        page = self.get(a, "/foryou")[2]
+        self.assertIn('data-no="rel00000000"', page)
+        post("/hide", "v=rel00000000")
+        page = self.get(a, "/foryou")[2]
+        self.assertNotIn("Related 0", page)
+        self.assertIn("Related 1", page)
+        post("/hide", "c=" + CID2)
+        self.assertNotIn("Related 1", self.get(a, "/foryou")[2])
+        self.assertIn("Hidden from suggestions ✓", self.get(a, "/channel?id=" + CID2)[2])
+        self.assertIn("Unhide", self.get(a, "/subs")[2])               # listed where you can take it back
+        post("/hide", "undo=1&v=rel00000000&c=" + CID2)
+        self.assertIn("Related 0", self.get(a, "/foryou")[2])
+        self.assertIn("Hide from suggestions", self.get(a, "/channel?id=" + CID2)[2])
+        # import (YouTube Takeout's file, or any list of links) and export
+        b = self.login("Imp")
+        real, app.refresh_stale = app.refresh_stale, lambda *a, **k: 0   # (the background refresh would rename them)
+        self.addCleanup(setattr, app, "refresh_stale", real)
+        C8, C9 = "UC" + "8" * 22, "UC" + "9" * 22
+        text = (f"Channel Id,Channel Url,Channel Title\n{C8},http://www.youtube.com/channel/{C8},\"Eight, the <b>\"\n"
+                f"https://www.youtube.com/channel/{C9}\n{C8}\nnot a channel UCshort\n")
+        _, url, page = self.get(b, "/subs/import", {"text": text})
+        self.assertIn("imported=2&of=2", url)
+        self.assertIn("Added 2 new subscriptions", page)
+        self.assertIn("Eight, the &lt;b&gt;", page)
+        self.assertIn("imported=0&of=2", self.get(b, "/subs/import", {"text": text})[1])   # again: nothing new
+        r = b.open(self.base + "/subs/export")
+        out = r.read().decode()
+        self.assertIn("text/csv", r.headers["Content-Type"])
+        self.assertIn(f'{C8},http://www.youtube.com/channel/{C8},"Eight, the <b>"', out)
+        c = self.login("Imp2")                                         # the export goes straight into another profile
+        self.assertIn("imported=2&of=2", self.get(c, "/subs/import", {"text": out})[1])
+        # saved videos survive the daily tidy-up
+        post("/later/toggle", "v=tdykeepme01")
+        db.execute("UPDATE videos SET published=1 WHERE id='tdykeepme01'")
+        app.tidy(db)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM videos WHERE id='tdykeepme01'").fetchone()[0], 1)
+
     def test_7_for_you(self):
         a = self.login("FY")
         self.assertIn("Nothing here yet", self.get(a, "/foryou")[2])
-        self.get(a, "/watch?v=srch0000001")
+        self.play(a, "srch0000001")
         self.get(a, "/related?v=srch0000001")                       # what the watch page's script does
         _, _, page = self.get(a, "/foryou")
         for i in range(3): self.assertIn(f"Related {i}", page)
         self.assertNotIn("watch?v=srch0000001", page)                 # never suggests what you've seen
         self.assertLess(page.index("Related 0"), page.index("Related 2"))   # higher in "up next" ranks higher
-        self.get(a, "/watch?v=rel00000000")
+        self.play(a, "rel00000000")
         self.assertNotIn("Related 0", self.get(a, "/foryou")[2])
         # channel cap: 5 related from one channel -> only 3 shown
         db = app.connect()
@@ -241,7 +333,7 @@ class T(unittest.TestCase):
             ("ntynew00001", "ntyhop20001", 0)])
         db.executemany("INSERT OR REPLACE INTO related_src(src,fetched_at) VALUES(?,?)",
                        [("ntyseen0001", int(time.time())), ("ntynew00001", int(time.time()))])
-        self.get(a, "/watch?v=ntyseen0001")
+        self.play(a, "ntyseen0001")
         _, _, page = self.get(a, "/new")
         self.assertIn("Fresh A", page)
         self.assertNotIn("Fresh B", page)                             # one per channel
@@ -276,7 +368,8 @@ class T(unittest.TestCase):
         _, _, page = self.get(a, "/watch?v=vid00000002")
         self.assertIn('<iframe id="yt" class="player"', page)          # normal browsers: YouTube's controls
         self.assertIn('setOption",["captions","track",{}]', page)     # captions start off (and stay off after seeking)
-        self.assertIn('yakPlayer(f,null,1)', page)                      # Feed: no muted autoplay fallback
+        self.assertIn('},1)})()', page)                                 # Feed: no muted autoplay fallback
+        self.assertIn('yakTrack("vid00000002")', page)                  # reports when it has really played
         self.assertNotIn('Tap for sound', page)
         self.assertNotIn('id="pp"', page)
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
