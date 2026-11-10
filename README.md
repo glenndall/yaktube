@@ -65,6 +65,8 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
   Pasting a youtube.com/shorts/ link opens it here.
 - **Videos start with captions off.** Where the browser blocks autoplay (iPhone, Safari), press play. In Shorts,
   a blocked Short starts muted with a "Tap for sound" button.
+- **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, the
+  **Quality** button switches Auto → 720p → 480p (remembered on that TV); the time display shows what's playing.
 - **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
 - **History:** remove single videos or clear it all. Removing a video also removes its influence on suggestions.
 

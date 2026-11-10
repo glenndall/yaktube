@@ -286,6 +286,9 @@ class T(unittest.TestCase):
         self.assertIn("vid00000002", page)
         self.assertIn(".tvbar", page)                                   # TV styles included
         self.assertIn('classList.add("hide")', page)                   # buttons fade out while playing
+        self.assertIn('id="ql">Quality Auto', page)                    # quality switch + what YouTube is playing
+        self.assertIn("localStorage.yakq", page)
+        self.assertIn("playbackQuality", page)
         self.assertNotIn('<iframe id="yt"', page)
 
     def test_10_tidy(self):

@@ -625,18 +625,30 @@ border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.7
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
 TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
 <div class="tvbar"><button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>
-<button id="cc">CC off</button><button id="sp">Speed 1×</button><span id="tm" class="meta">0:00</span></div></div>
+<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><span id="tm" class="meta">0:00</span></div></div>
 <script>(function(){var V="__VID__",st={t:0,d:0,s:-1},cc=false,rates=[1,1.25,1.5,2,0.75],ri=0,$=function(i){return document.getElementById(i)};
+// Quality: YouTube picks the picture quality from the player's size and there is no command to change it, so
+// "720p" / "480p" lay the player out smaller and stretch it back to full screen (for TVs that play the sound
+// of a 4K or 60-frames-a-second video but show no picture). The choice is remembered on this TV.
+var qw=[0,1280,854],qn=["Auto","720p","480p"],qi=0,t0=0,back=0;
+try{qi=+localStorage.yakq||0;if(!qn[qi])qi=0;var o=(sessionStorage.yakt||"").split(":");if(o[0]==V){t0=+o[1]||0;back=1}sessionStorage.removeItem("yakt")}catch(x){}
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media; fullscreen";f.referrerPolicy="strict-origin-when-cross-origin";
-f.style.cssText="width:100%;height:100%;border:0;display:block;background:#000";
-f.src="https://www.youtube-nocookie.com/embed/"+V+"?autoplay=1&rel=0&modestbranding=1&controls=0&enablejsapi=1&origin="+encodeURIComponent(location.origin);
+f.style.cssText="width:100%;height:100%;border:0;display:block;background:#000;transform-origin:0 0";
 $("pl").attachShadow({mode:"open"}).appendChild(f);
+function fit(){var w=$("pl").clientWidth,h=$("pl").clientHeight,k=qw[qi]?w*(window.devicePixelRatio||1)/qw[qi]:1;
+if(k>1){f.style.width=w/k+"px";f.style.height=h/k+"px";f.style.transform="scale("+k+")"}else{f.style.width=f.style.height="100%";f.style.transform=""}}
+fit();addEventListener("resize",fit);addEventListener("load",fit);
+f.src="https://www.youtube-nocookie.com/embed/"+V+"?autoplay=1&rel=0&modestbranding=1&controls=0&enablejsapi=1"+(t0?"&start="+t0:"")+"&origin="+encodeURIComponent(location.origin);
+$("ql").textContent="Quality "+qn[qi];
+$("ql").onclick=function(){qi=(qi+1)%qn.length;try{localStorage.yakq=qi;sessionStorage.yakt=V+":"+Math.floor(st.t)}catch(x){}location.reload()};  // reload, carry on from the same spot
+var QL={tiny:"144p",small:"240p",medium:"360p",large:"480p",hd720:"720p",hd1080:"1080p",hd1440:"1440p",hd2160:"4K",hd2880:"5K",highres:"8K"};
 function cmd(fn,a){f.contentWindow.postMessage(JSON.stringify({event:"command",func:fn,args:a||[],id:1,channel:"widget"}),"*")}
 var hello=setInterval(function(){f.contentWindow&&f.contentWindow.postMessage(JSON.stringify({event:"listening",id:1,channel:"widget"}),"*")},400);
 function tf(x){x=Math.max(0,Math.floor(x));var h=Math.floor(x/3600),m=Math.floor(x/60)%60,s=("0"+x%60).slice(-2);return(h?h+":"+("0"+m).slice(-2):m)+":"+s}
-function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=tf(st.t)+(st.d?" / "+tf(st.d):"")}
+function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=tf(st.t)+(st.d?" / "+tf(st.d):"")+(st.q?" · playing "+(QL[st.q]||st.q):"")}
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{},was=st.s;if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
+if(i.playbackQuality&&i.playbackQuality!="unknown")st.q=i.playbackQuality;
 if(st.s!=was)wake();
 if(!cc&&(m.event=="onReady"||(st.s==1&&!st.off))){ccoff();if(st.s==1){st.off=1;setTimeout(ccoff,1500);setTimeout(ccoff,4000)}}upd()});
 function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for good: unloadModule came back after every seek
@@ -655,7 +667,7 @@ bar.addEventListener("focusin",home);addEventListener("load",home);
 var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
 addEventListener("keydown",function(k){var hid=bar.classList.contains("hide");wake();
 if(hid&&!/^Media/.test(k.key)){k.preventDefault();k.stopImmediatePropagation()}},true);
-$("pp").focus()})()</script>"""
+$(back?"ql":"pp").focus()})()</script>"""
 APK = os.path.join(os.path.dirname(DB_PATH), "yaktube-tv.apk")
 
 # Web players (not the TV app). yakPlayer() talks to YouTube's embed: captions start off, and (Shorts only) if the
