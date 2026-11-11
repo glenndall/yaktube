@@ -282,8 +282,6 @@ class T(unittest.TestCase):
         self.assertIn('<h2>New to you</h2>', page)                     # its own row, not in the rail
         self.assertEqual(page.count('href="/watch?v=tvn'), 6)          # each new channel once, nowhere else
         self.assertTrue(all(page.index('<h2>New to you</h2>') < page.index(f'href="/watch?v=tvn{i:08d}"') for i in range(6)))
-        self.assertNotIn('<h2>Shorts</h2>', page)                      # Shorts have their own place in the rail
-        self.assertNotIn('class="scard"', page)
         self.assertIn('class="tvside"', page)
         rail = page[page.index('class="tvside"'):]
         for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "Channels"):
@@ -298,7 +296,9 @@ class T(unittest.TestCase):
         self.get(a, "/subs/add", {"url": "@woz"})
         page = self.get(a, "/")[2]
         h2 = re.findall(r"<h2>([^<]*)</h2>", page)
-        self.assertEqual(h2[:3], ["Recommended for you", "New from your subscriptions", "New to you"])
+        self.assertEqual(h2[:4], ["Recommended for you", "New from your subscriptions", "New to you", "Shorts"])
+        self.assertIn('class="scard" href="/shorts?v=', page)          # pick a Short on its own
+        self.assertIn(".strip .scard img{aspect-ratio:9/16", page)      # tall, like YouTube's TV app
         self.assertIn('class=bare', self.get(a, "/watch?v=tvwatched01")[2])   # no rail while a video plays
         self.assertIn('class="go big"', self.get(a, "/search")[2])     # Search: a big box
         self.assertIn("#sr{display:none}", self.get(a, "/shorts")[2])  # Shorts: no Share button on the TV

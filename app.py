@@ -1055,13 +1055,16 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 .bare .tvside{display:none}#sr{display:none}   /* Shorts: no Share button on the TV */.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
-#tvinfo{position:sticky;top:0;z-index:5;min-height:150px;padding:8px 6px 28px;background:linear-gradient(#111 78%,rgba(17,17,17,0))}
-#tvinfo b{display:block;font-size:30px;line-height:1.2;max-width:70%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-#tvinfo span{display:block;margin-top:6px;font-size:17px;color:#bbb}#tvinfo i{display:block;margin-top:4px;font-style:normal;font-size:15px;color:var(--accent)}
-.trow{margin:0 0 18px;scroll-margin-top:170px}.trow h2{font-size:21px;margin:0 0 4px 8px;font-weight:600}
-.strip{position:relative;display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;padding:14px 8px 16px}.strip::-webkit-scrollbar{display:none}
-.strip .card{flex:0 0 calc((100vw - 220px) / 4.4)}.strip .scard{flex:0 0 calc((100vw - 220px) / 7.2)}
-.strip .card h3{-webkit-line-clamp:1;font-size:15px}.strip .card .meta,.strip .why{display:none}.strip .scard .meta{display:none}
+#tvinfo{position:sticky;top:0;z-index:5;min-height:96px;padding:2px 6px 16px;background:linear-gradient(#111 80%,rgba(17,17,17,0))}
+#tvinfo b{display:block;font-size:21px;line-height:1.25;max-width:70%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#tvinfo span{display:block;margin-top:4px;font-size:13px;color:#bbb}#tvinfo i{display:block;margin-top:2px;font-style:normal;font-size:12px;color:var(--accent)}
+.trow{margin:0 0 10px;scroll-margin-top:108px}.trow h2{font-size:15px;margin:0 0 2px 8px;font-weight:600;color:#ddd}
+.strip{position:relative;display:flex;gap:16px;overflow-x:auto;scrollbar-width:none;padding:12px 8px 12px}.strip::-webkit-scrollbar{display:none}
+/* the pictures are the star: about 3½ videos across, Shorts tall like the video itself (YouTube's TV app uses 9:16) */
+.strip .card{flex:0 0 calc((100vw - 150px) / 3.4)}.strip .scard{flex:0 0 calc((100vw - 150px) / 6.4)}
+.strip .scard img{aspect-ratio:9/16;border-radius:10px}
+.strip .card h3,.strip .scard h3{-webkit-line-clamp:1;font-size:12.5px;font-weight:500;margin-top:6px;color:#ccc}
+.strip .card .meta,.strip .why{display:none}.strip .scard .meta{display:none}
 .scard{transition:transform .1s}.scard:focus{transform:scale(1.06)}.scard:focus h3{color:var(--accent)}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
@@ -1720,7 +1723,7 @@ class App(BaseHTTPRequestHandler):
         pid = self.prof["id"]
         threading.Thread(target=warm_related, args=(pid,), daemon=True).start()
         picks = home_feed(self.db, pid, 90 if self.tv() else 60)
-        if self.tv() and picks:                               # (Shorts have their own place in the TV's rail)
+        if self.tv() and picks:
             return self.send(layout("Home", self.tv_home(picks), self.prof, "home"), headers=[("Cache-Control", "no-store")])
         shorts = home_shorts(self.db, pid)
         show_why = self.q.get("why") == "1"
@@ -1748,7 +1751,7 @@ class App(BaseHTTPRequestHandler):
     def tv_home(self, picks):
         """Home on the TV: rows like the YouTube app on Google TV. Recommended for you (the top picks), New from your
         subscriptions (newest first), New to you, then a row for each reason with 3 or more videos ("Because you
-        watched …", "From your search …"), then the rest. No Shorts row: Shorts have their own place in the rail."""
+        watched …", "From your search …"), then the rest. Shorts get a row after New to you (tall cards, like YouTube's)."""
         pid = self.prof["id"]
         ntu = new_to_you(self.db, pid, 20)
         self.db.executemany("INSERT OR IGNORE INTO shown(profile_id,video_id,first_at) VALUES(?,?,?)",   # so it turns over
@@ -1773,13 +1776,13 @@ class App(BaseHTTPRequestHandler):
         for p in rest[10:]:
             groups.setdefault(p[3], []).append(p)
         rows = ([("Recommended for you", rest[:10]), ("New from your subscriptions", subs),
-                 ("New to you", [(r, "explore", 0, WHY["explore"]) for r in ntu])]
+                 ("New to you", [(r, "explore", 0, WHY["explore"]) for r in ntu]), ("Shorts", home_shorts(self.db, pid, 20))]
                 + [(k, v) for k, v in groups.items() if len(v) >= 3]
                 + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
         return '<h1 class="sr">Home</h1><div id="tvinfo"></div>' + "".join(
             f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
-            + "".join(self.card(r, hide=True, src=src, why=why) for r, src, _, why in row) + '</div></section>'
-            for title, row in rows if row) + HOME_JS
+            + "".join(short_card(p) if title == "Shorts" else self.card(p[0], hide=True, src=p[1], why=p[3]) for p in row)
+            + '</div></section>' for title, row in rows if row) + HOME_JS
 
     def impr(self):
         """Home reports the videos that were really on screen (a second or more); passed-over ones sink next time,
