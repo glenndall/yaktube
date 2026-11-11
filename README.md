@@ -49,7 +49,21 @@ No address is built in, so the same app works with anyone's YakTube.
 **To update:** replace the `.apk` in the same place and install it again from Downloader. It installs over the old
 one and keeps the address and profile.
 
-The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (`TV_CSS`), so it updates with the server.
+**The TV layout** is laid out like the YouTube app on Google TV:
+- A rail of icons down the left: Search, Home, Shorts, Subscriptions, Later, History, New to you, Channels, then your
+  recently watched channels and your profile. It widens with names when the remote moves into it.
+- Home is rows you scroll sideways: *Recommended for you*, *Shorts*, then a row for each reason (*Because you watched …*,
+  *New from your subscriptions*, *From your search …*). The selected video's title, channel and reason show above them.
+- Remote: Left / Right along a row, Up / Down between rows (each row remembers where you were), Left at the start of a
+  row opens the rail, Right leaves it. The rail is hidden while a video plays.
+- The video player shows the title on top and, along the bottom, a progress bar (select it, then Left / Right jump
+  10 seconds; hold to keep going), then Play/Pause, ⟲10s / 10s⟳, thumbs up / down, Subscribe, Watch later and
+  ⚙ Settings. Settings opens a small menu with captions, speed, quality and autoplay (Up / Down to move, OK to change,
+  Left or Back to close); a dot on ⚙ means one of them isn't the usual. The controls fade after 5 seconds (not while
+  the menu is open); any button brings them back.
+
+It all lives in `app.py` (`TV_CSS`, `TV_JS`), so it updates with the server: no need to reinstall the TV app.
+To preview it on a computer, add `?tv=1` to any YakTube address (`?tv=0` switches back).
 
 ## Using it
 - **Profiles:** "Who's watching?" Each profile has its own subscriptions, history and suggestions.
@@ -83,13 +97,13 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
   Pasting a youtube.com/shorts/ link opens it here.
 - **Videos start with captions off.** Where the browser blocks autoplay (iPhone, Safari), press play. In Shorts,
   a blocked Short starts muted with a "Tap for sound" button.
-- **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, the
-  **Quality** button switches Auto → 720p → 480p (remembered on that TV); the time display shows what's playing.
+- **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, ⚙ Settings →
+  **Quality** switches Auto → 720p → 480p (remembered on that TV); the line under it shows what's playing.
 - **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
 - **Not interested:** ✕ on a video on Home / New to you hides it, and offers to hide the whole channel
   (or use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
   where you can unhide them. Your feed and search are not affected.
-- **Autoplay on the TV:** off by default. Switch on **Autoplay** in the TV player's buttons (remembered on that TV)
+- **Autoplay on the TV:** off by default. Switch on **Autoplay** in the TV player's ⚙ Settings (remembered on that TV)
   and when a video ends, the next "Up next" video you haven't seen starts after 10 seconds (Cancel stops it).
 - **History:** a video counts as watched once it has played for 10 seconds, not when you open it. Remove single
   videos or clear it all. Removing a video also removes its influence on suggestions.

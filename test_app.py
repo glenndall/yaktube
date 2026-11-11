@@ -259,6 +259,44 @@ class T(unittest.TestCase):
         _, url, _ = self.get(a, "/later/toggle", {"v": "vid00000002", "next": "/watch?v=vid00000002"})   # without the script: as before
         self.assertTrue(url.endswith("/watch?v=vid00000002"))
 
+    def test_19_tv_layout(self):
+        a = self.login("TVrows")
+        db = app.connect()
+        pid = db.execute("SELECT id FROM profiles WHERE name='TVrows'").fetchone()[0]
+        now = int(time.time())
+        db.execute("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES('tvwatched01',?, 'Watched on TV')", (CID2,))
+        rows = [(f"tvr{i:08d}", "UC" + "%02d" % i * 11, f"TV pick {i}") for i in range(20)]
+        db.executemany("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES(?,?,?)", rows)
+        db.executemany("INSERT OR REPLACE INTO related(src,video_id,pos) VALUES('tvwatched01',?,?)", [(r[0], i) for i, r in enumerate(rows)])
+        db.execute("INSERT OR REPLACE INTO related_src VALUES('tvwatched01', ?)", (now,))
+        db.execute("INSERT INTO history(profile_id,video_id,watched_at) VALUES(?, 'tvwatched01', ?)", (pid, now))
+        web = self.get(a, "/")[2]
+        self.assertNotIn('class="trow"', web)                          # phones and computers: the grid, no TV script
+        self.assertNotIn("TV pages: the remote", web)
+        a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
+        page = self.get(a, "/")[2]
+        self.assertIn('<div id="tvinfo">', page)                       # the focused video's details
+        self.assertIn('<h2>Recommended for you</h2>', page)            # rows like the Google TV app
+        self.assertIn('<h2>Because you watched Watched on TV</h2>', page)
+        self.assertIn('class="tvside"', page)
+        rail = page[page.index('class="tvside"'):]
+        for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "New to you", "Channels"):
+            self.assertIn(f"<span>{label}</span>", rail)
+        self.assertLess(rail.index("<span>Search"), rail.index("<span>Home"))
+        self.assertIn("Recent channels", rail)                          # channels you watched lately
+        self.assertIn(f'href="/channel?id={CID2}"', rail)
+        self.assertIn('stopImmediatePropagation', page)                 # the remote: rows and rail
+        self.assertIn('class=bare', self.get(a, "/watch?v=tvwatched01")[2])   # no rail while a video plays
+        self.assertIn('class="go big"', self.get(a, "/search")[2])     # Search: a big box
+        # a normal browser can preview the TV layout
+        b = self.login("TVpreview")
+        _, url, page = self.get(b, "/feed?tv=1")
+        self.assertTrue(url.endswith("/feed"))
+        self.assertIn('class="tvside"', page)
+        self.assertIn(".tvside{display:flex", page)
+        self.assertNotIn(".tvside{display:flex", self.get(b, "/feed?tv=0")[2])
+        db.close()
+
     def test_2_bad_input(self):
         a = self.login("Tester")
         _, _, page = self.get(a, "/subs/add", {"url": "<script>x</script>"})
@@ -537,6 +575,16 @@ class T(unittest.TestCase):
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         _, _, page = self.get(a, "/watch?v=vid00000002")
         self.assertIn('id="pp"', page)                                  # TV app: our own buttons
+        self.assertIn('<div id="sk" tabindex="0" role="slider"', page)  # a progress bar you can scrub with the remote
+        tvbar = page[page.index('<div class="tvbar">'):page.index('<div class="tvtop">')]
+        for b in ('data-rate="1"', 'data-rate="-1"', 'Watch later', 'action="/subs/'):   # thumbs, subscribe, later
+            self.assertIn(b, tvbar)
+        self.assertIn('<div class="tvtop"><b>Video 2 &lt;b&gt;</b>', page)   # the title over the picture
+        self.assertNotIn("__ACTS__", page)
+        menu = page[page.index('<div id="gm" class="tvgm" role="menu" hidden>'):page.index('<div class="tvtop">')]   # ⚙ Settings
+        for b in ('id="cc">Captions off', 'id="sp">Speed 1×', 'id="ql">Quality Auto', 'id="ap">Autoplay off'):
+            self.assertIn(b, menu)
+        self.assertNotIn('id="cc"', tvbar[:tvbar.index('id="gs"')])     # not on the bar itself any more
         self.assertIn('embed/"+V', page)
         self.assertIn("vid00000002", page)
         self.assertIn(".tvbar", page)                                   # TV styles included

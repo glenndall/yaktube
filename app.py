@@ -944,7 +944,7 @@ header{position:sticky;top:0;z-index:5;display:flex;gap:14px;align-items:center;
 header .logo{width:196px;flex:none;padding-left:8px}
 form.go{flex:1;max-width:620px;margin:0 auto;display:flex}
 nav svg,.rate svg{width:22px;height:22px;flex:none;fill:currentColor}
-.rib,.bot{display:none}
+.rib,.bot,.tvside{display:none}
 .shell{display:flex;align-items:flex-start}
 .side{position:sticky;top:57px;width:228px;flex:none;max-height:calc(100vh - 57px);overflow-y:auto;padding:10px 10px 20px;scrollbar-width:thin}
 .side a{display:flex;align-items:center;gap:20px;padding:9px 14px;border-radius:10px;white-space:nowrap}
@@ -1038,7 +1038,29 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 # Extra styles when the page is shown by the YakTube TV app (its browser says "YakTubeTV").
 TV_CSS = """<style>
 :root{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
-body{font-size:17px}header{position:static}main{padding:18px 28px 40px}.side{top:0;max-height:100vh}
+body{font-size:17px}main{padding:18px 28px 40px 120px;max-width:none}
+header,.side,.rib,.bot{display:none!important}.shell{display:block}
+/* the rail: icons down the left; it widens with names when the remote moves into it */
+.tvside{display:flex;flex-direction:column;gap:2px;position:fixed;left:0;top:0;bottom:0;z-index:20;width:96px;padding:28px 16px;
+  overflow:hidden;background:linear-gradient(90deg,#0a0a0a 70%,rgba(10,10,10,.92));transition:width .15s}
+.tvside:focus-within{width:320px;box-shadow:30px 0 80px rgba(0,0,0,.7)}
+.tvside a{display:flex;align-items:center;gap:22px;min-height:52px;padding:0 16px;border-radius:999px;white-space:nowrap;color:#aaa;flex:none}
+.tvside a svg{width:30px;height:30px}.tvside a.on{color:#fff}.tvside a.on svg{color:var(--accent)}
+.tvside a span,.tvside h4{opacity:0;transition:opacity .12s}.tvside:focus-within a span,.tvside:focus-within h4{opacity:1}
+.tvside a:focus{background:#f2f2f2;color:#111;outline:none!important}.tvside a:focus svg{color:#111}
+.tvside h4{margin:18px 16px 6px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#777;white-space:nowrap}
+.tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}.tvside .me{margin-top:auto}
+.bare .tvside{display:none}.bare main{padding:0}
+.go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
+/* Home: rows you move along with Left / Right, the focused video's details above them */
+#tvinfo{position:sticky;top:0;z-index:5;min-height:150px;padding:8px 6px 28px;background:linear-gradient(#111 78%,rgba(17,17,17,0))}
+#tvinfo b{display:block;font-size:30px;line-height:1.2;max-width:70%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+#tvinfo span{display:block;margin-top:6px;font-size:17px;color:#bbb}#tvinfo i{display:block;margin-top:4px;font-style:normal;font-size:15px;color:var(--accent)}
+.trow{margin:0 0 18px;scroll-margin-top:170px}.trow h2{font-size:21px;margin:0 0 4px 8px;font-weight:600}
+.strip{position:relative;display:flex;gap:20px;overflow-x:auto;scrollbar-width:none;padding:14px 8px 16px}.strip::-webkit-scrollbar{display:none}
+.strip .card{flex:0 0 calc((100vw - 220px) / 4.4)}.strip .scard{flex:0 0 calc((100vw - 220px) / 7.2)}
+.strip .card h3{-webkit-line-clamp:1;font-size:15px}.strip .card .meta,.strip .why{display:none}.strip .scard .meta{display:none}
+.scard{transition:transform .1s}.scard:focus{transform:scale(1.06)}.scard:focus h3{color:var(--accent)}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
@@ -1046,6 +1068,21 @@ a[target=_blank],.lt:not(.on),.no,.imp{display:none}
 .watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:100vh;overflow:hidden}.tvp{position:relative}
 .tvbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:48px 22px 18px;
 border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .5s}.tvbar.hide{opacity:0}
+.tvsk{display:flex;align-items:center;gap:14px;flex-basis:100%;margin-bottom:10px;font-size:14px;font-weight:600;color:#eee;text-shadow:0 1px 2px #000}
+#sk{flex:1;height:18px;display:flex;align-items:center;border-radius:9px;outline:none!important}#sk i{position:relative;display:block;width:100%;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}
+#sk b{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#f03}
+#sk b:after{content:"";position:absolute;right:-8px;top:50%;width:16px;height:16px;margin-top:-8px;border-radius:50%;background:#f03;transform:scale(0);transition:transform .12s}
+#sk:focus i{height:8px}#sk:focus b:after{transform:scale(1);box-shadow:0 0 0 4px rgba(255,255,255,.85)}
+.tvtop{position:absolute;left:0;right:0;top:0;padding:22px 28px 60px;background:linear-gradient(rgba(0,0,0,.75),transparent);transition:opacity .5s;pointer-events:none}
+.tvtop b{display:block;font-size:24px;line-height:1.25;max-width:80%;text-shadow:0 1px 3px #000}.tvtop span{display:block;margin-top:4px;font-size:15px;color:#ddd;text-shadow:0 1px 2px #000}
+.tvbar.hide~.tvtop{opacity:0}
+.tvgm{position:absolute;right:22px;bottom:64px;display:flex;flex-direction:column;gap:6px;min-width:230px;padding:12px;border-radius:16px;
+  background:rgba(22,22,22,.96);box-shadow:0 0 0 1px var(--line),0 12px 40px rgba(0,0,0,.6)}.tvgm[hidden]{display:none}
+.tvbar .tvgm button{text-align:left;font-size:15px;padding:9px 16px;border-radius:10px;background:none}
+.tvbar .tvgm button:focus{background:var(--fg);color:var(--bg)}.tvgm .meta{padding:4px 16px 0;font-size:12px;color:#aaa}
+#gs{position:relative}#gs.dot:after{content:"";position:absolute;top:1px;right:3px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
+.tvbar form{display:inline}.tvbar .rate{background:var(--card);box-shadow:none}.tvbar .rate button{border-radius:0;background:none;padding:3px 12px}
+.tvbar .rate button.on{color:var(--accent)}.tvbar .rate svg{width:16px;height:16px;vertical-align:-3px}
 .tvbar button,.tvnx button{font:inherit;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:0;background:var(--card);color:var(--fg)}
 .tvbar button:focus,.tvnx button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
 .tvnx{position:absolute;right:28px;bottom:84px;max-width:440px;padding:16px 18px;border-radius:14px;background:rgba(20,20,20,.94);box-shadow:0 0 0 1px var(--line)}
@@ -1065,8 +1102,12 @@ else if(Math.abs(T-sent)>=15||(!playing&&Math.abs(T-sent)>=1))send(0)}}</script>
 # TV player: the YouTube player never takes the remote's focus (it lives in a shadow root the remote
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
 TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
-<div class="tvbar"><button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>
-<button id="cc">CC off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button><button id="ap">Autoplay off</button><span id="tm" class="meta">0:00</span></div>
+<div class="tvbar"><div class="tvsk"><span id="t0">0:00</span><div id="sk" tabindex="0" role="slider" aria-label="Seek"><i><b></b></i></div><span id="t1"></span></div>
+<button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>__ACTS__
+<button id="gs" aria-haspopup="menu" aria-expanded="false">⚙ Settings</button>
+<div id="gm" class="tvgm" role="menu" hidden><button id="cc">Captions off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button>
+<button id="ap">Autoplay off</button><span id="tm" class="meta"></span></div></div>
+<div class="tvtop">__TOP__</div>
 <div id="nx" class="tvnx" hidden><span class="meta">Up next in <span id="nxn">10</span></span><b id="nxt"></b>
 <button id="nxg">Play now</button><button id="nxc">Cancel</button></div></div>
 <script>(function(){var V="__VID__",st={t:0,d:0,s:-1},cc=false,rates=[1,1.25,1.5,2,0.75],ri=0,$=function(i){return document.getElementById(i)};
@@ -1088,7 +1129,13 @@ var QL={tiny:"144p",small:"240p",medium:"360p",large:"480p",hd720:"720p",hd1080:
 function cmd(fn,a){f.contentWindow.postMessage(JSON.stringify({event:"command",func:fn,args:a||[],id:1,channel:"widget"}),"*")}
 var hello=setInterval(function(){f.contentWindow&&f.contentWindow.postMessage(JSON.stringify({event:"listening",id:1,channel:"widget"}),"*")},400);
 function tf(x){x=Math.max(0,Math.floor(x));var h=Math.floor(x/3600),m=Math.floor(x/60)%60,s=("0"+x%60).slice(-2);return(h?h+":"+("0"+m).slice(-2):m)+":"+s}
-function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=tf(st.t)+(st.d?" / "+tf(st.d):"")+(st.q?" · playing "+(QL[st.q]||st.q):"")}
+function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=st.q?"playing "+(QL[st.q]||st.q):"";
+$("t0").textContent=tf(st.t);$("t1").textContent=st.d?tf(st.d):"";st.at=Date.now()}
+// Progress bar: moves smoothly between the player's reports. Select it with the remote and Left / Right jump 10s
+// (hold to keep going), like the YouTube app on a TV.
+(function draw(){var t=st.t+(st.s==1&&st.at?(Date.now()-st.at)/1000:0);$("sk").firstChild.firstChild.style.width=(st.d?Math.min(100,t/st.d*100):0)+"%";requestAnimationFrame(draw)})();
+$("sk").addEventListener("keydown",function(k){if(k.key=="ArrowLeft"||k.key=="ArrowRight"){k.preventDefault();k.stopImmediatePropagation();wake();seek(k.key=="ArrowRight"?10:-10)}
+else if(k.key=="Enter"){k.preventDefault();toggle()}});
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{},was=st.s;if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
 if(i.playbackQuality&&i.playbackQuality!="unknown")st.q=i.playbackQuality;
@@ -1098,11 +1145,11 @@ function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for go
 function toggle(){if(st.s==1||st.s==3){cmd("pauseVideo");st.s=2}else{cmd("playVideo");st.s=1}upd()}
 function seek(d){st.t=Math.min(Math.max(0,st.t+d),st.d||1e9);cmd("seekTo",[st.t,true]);upd()}
 $("pp").onclick=toggle;[].forEach.call(document.querySelectorAll("[data-k]"),function(b){b.onclick=function(){seek(+b.dataset.k)}});
-$("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("setOption",["captions","track",{languageCode:"en"}])}else ccoff();this.textContent="CC "+(cc?"on":"off")};
+$("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("setOption",["captions","track",{languageCode:"en"}])}else ccoff();this.textContent="Captions "+(cc?"on":"off")};
 $("sp").onclick=function(){ri=(ri+1)%rates.length;cmd("setPlaybackRate",[rates[ri]]);this.textContent="Speed "+rates[ri]+"×"};
 addEventListener("keydown",function(k){var c=k.key;if(c=="MediaPlayPause"||c=="MediaPlay"||c=="MediaPause"){toggle();k.preventDefault()}
 else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewind"){seek(-10);k.preventDefault()}});
-var bar=document.querySelector(".tvbar");[].forEach.call(document.querySelectorAll(".tvbar button,.tvnx button"),function(b){b.scrollIntoView=function(){}});
+var bar=document.querySelector(".tvbar");[].forEach.call(document.querySelectorAll(".tvbar button,.tvnx button,#sk"),function(b){b.scrollIntoView=function(){}});
 function home(){var y=$("pl").getBoundingClientRect().top+scrollY;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
 bar.addEventListener("focusin",home);$("nx").addEventListener("focusin",home);addEventListener("load",home);
 // Autoplay (off unless switched on; remembered on this TV): when a video ends, count down 10s, then play the
@@ -1117,10 +1164,24 @@ $("nxt").textContent=a.querySelector("h3").textContent;$("nx").hidden=false;$("n
 $("nxc").onclick=function(){stopnx();$("pp").focus()};
 // The buttons fade out after 5s of no remote presses while playing; the next press only brings them back
 // (so OK doesn't also pause). Play/pause and fast-forward/rewind keys always act straight away.
-var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
+var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&$("gm").hidden&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
 addEventListener("keydown",function(k){var hid=bar.classList.contains("hide");wake();
 if(hid&&!/^Media/.test(k.key)){k.preventDefault();k.stopImmediatePropagation()}},true);
-$(back?"ql":"pp").focus()})()</script>"""
+// Settings (⚙): captions, speed, quality and autoplay, in a small menu above the button. Up / Down move, OK changes
+// one, Left or Back closes it. While it's open the controls don't fade. A dot on ⚙ means something isn't the usual.
+var gm=$("gm"),gs=$("gs"),gl=[].slice.call(gm.querySelectorAll("button"));
+function mark(){gs.classList.toggle("dot",!!(cc||ri||qi))}
+function openm(){gm.hidden=false;gs.setAttribute("aria-expanded","true");gl[0].focus();wake();
+  if(!window.__yakm&&window.yakBack){window.__yakm=1;var ob=window.yakBack;window.yakBack=function(){if(!gm.hidden){shut();return true}return ob()}}}
+function shut(){gm.hidden=true;gs.setAttribute("aria-expanded","false");gs.focus();wake()}
+gs.onclick=function(){gm.hidden?openm():shut()};
+gm.addEventListener("click",function(){setTimeout(mark)});
+gm.addEventListener("keydown",function(k){var d=k.key,i=gl.indexOf(document.activeElement);
+  if(d=="ArrowUp"||d=="ArrowDown"){k.preventDefault();k.stopImmediatePropagation();var n=gl[i+(d=="ArrowDown"?1:-1)];if(n)n.focus();wake()}
+  else if(d=="ArrowLeft"||d=="Escape"||d=="GoBack"||d=="BrowserBack"){k.preventDefault();k.stopImmediatePropagation();shut()}
+  else if(d=="ArrowRight"){k.preventDefault();k.stopImmediatePropagation()}});
+gm.addEventListener("focusout",function(e){if(!gm.hidden&&!gm.contains(e.relatedTarget)&&e.relatedTarget!=gs){gm.hidden=true;gs.setAttribute("aria-expanded","false")}});
+mark();if(back){openm();$("ql").focus()}else $("pp").focus()})()</script>"""
 APK = os.path.join(os.path.dirname(DB_PATH), "yaktube-tv.apk")
 
 # Web players (not the TV app). yakPlayer() talks to YouTube's embed: captions start off, and (Shorts only) if the
@@ -1379,6 +1440,31 @@ document.querySelectorAll(".card[data-s]").forEach(function(a){io.observe(a)})}
 setInterval(flush,5000);addEventListener("pagehide",flush);
 addEventListener("pageshow",function(e){if(e.persisted)location.reload()})})()</script>"""
 
+# TV pages: the remote. On Home the rows work like the YouTube app on Google TV: Left / Right along a row, Up / Down
+# to the row above or below (each row remembers where you were), Left at the start of a row opens the rail.
+# In the rail, Up / Down move and Right goes back to where you were. Anything else is left to the TV app's own
+# arrow-key handling (it jumps to the nearest thing in that direction).
+TV_JS = """<script>(function(){var rail=document.querySelector(".tvside"),last=null,inf=document.getElementById("tvinfo");
+if(!rail)return;
+function rows(){return[].slice.call(document.querySelectorAll(".trow"))}
+function items(r){return[].slice.call(r.querySelectorAll(".strip>a"))}
+function info(a){if(!inf)return;var q=function(s){var x=a.querySelector(s);return x?x.textContent:""},m=a.querySelectorAll(".meta");
+inf.innerHTML="<b></b><span></span><i></i>";inf.children[0].textContent=q("h3");
+inf.children[1].textContent=[].map.call(m,function(x){return x.textContent}).filter(String).join(" \u00b7 ");inf.children[2].textContent=q(".why")}
+function put(a){var r=a.closest(".trow"),s=a.parentNode;r.dataset.i=items(r).indexOf(a);s.scrollLeft=Math.max(0,a.offsetLeft-a.offsetWidth*.6);
+a.focus({preventScroll:true});if(rows()[0]==r)scrollTo(0,0);else r.scrollIntoView({block:"start"});info(a)}
+function open(){(rail.querySelector("a.on")||rail.querySelector("a")).focus()}
+function stop(k){k.preventDefault();k.stopImmediatePropagation()}
+addEventListener("focusin",function(e){var t=e.target;if(rail.contains(t)){if(!rail.contains(e.relatedTarget)){var on=rail.querySelector("a.on");if(on&&on!=t)on.focus()}}
+else if(t!=document.body){last=t;if(t.closest&&t.closest(".trow"))info(t)}});
+addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,r;if(!/^Arrow/.test(d))return;
+if(rail.contains(a)){stop(k);if(d=="ArrowRight"){if(last&&document.contains(last)){if(last.closest(".trow"))put(last);else last.focus()}else{var f=document.querySelector(".trow .strip>a");f?put(f):rail.blur()}}
+else if(d!="ArrowLeft"){var l=[].slice.call(rail.querySelectorAll("a")),n=l[l.indexOf(a)+(d=="ArrowDown"?1:-1)];if(n){n.focus();n.scrollIntoView({block:"nearest"})}}return}
+if(a&&a.closest&&(r=a.closest(".trow"))){stop(k);var l=items(r),i=l.indexOf(a);
+if(d=="ArrowRight"){if(l[i+1])put(l[i+1])}else if(d=="ArrowLeft"){if(i>0)put(l[i-1]);else open()}
+else{var R=rows(),n=R[R.indexOf(r)+(d=="ArrowDown"?1:-1)];if(n){var m=items(n);put(m[Math.min(+n.dataset.i||0,m.length-1)])}}}},true);
+var f=document.querySelector(".trow .strip>a");if(f&&(!document.activeElement||document.activeElement==document.body))put(f)})()</script>"""
+
 # Navigation icons (24x24, filled with the text colour).
 ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
     "home": '<path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/>',
@@ -1396,12 +1482,19 @@ ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in 
     "up": '<path d="M1 21h4V9H1zm22-11a2 2 0 0 0-2-2h-6.3l.95-4.57.03-.32a1.5 1.5 0 0 0-.44-1.06L14.17 1 7.6 7.6A2 2 0 0 0 7 9v10'
           'a2 2 0 0 0 2 2h9a2 2 0 0 0 1.84-1.22l3.02-7.05A2 2 0 0 0 23 12z"/>',
     "share": '<path d="M14 4v5C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V20l8-8z"/>',
+    "search": '<path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>',
 }.items()}
 # Home, Shorts and Subscriptions are the main three (the bar along the bottom on a phone); the rest sit under them
 # on a computer, or in the ribbon across the top on a phone.
 MAIN_TABS = (("home", "/", "Home"), ("shorts", "/shorts", "Shorts"), ("feed", "/feed", "Subscriptions"))
 MORE_TABS = (("new", "/new", "New to you"), ("later", "/later", "Later"), ("subs", "/subs", "Channels"),
              ("hist", "/history", "History"))
+
+
+# The TV's rail down the left, in the order YouTube's Google TV app now uses: search, then the places you go most.
+TV_TABS = (("search", "/search", "Search"), ("home", "/", "Home"), ("shorts", "/shorts", "Shorts"),
+           ("feed", "/feed", "Subscriptions"), ("later", "/later", "Later"), ("hist", "/history", "History"),
+           ("new", "/new", "New to you"), ("subs", "/subs", "Channels"))
 
 
 def rate_buttons(vid, val):
@@ -1412,13 +1505,13 @@ def rate_buttons(vid, val):
             + '</div>')
 
 
-def layout(title, body, prof=None, tab="", q=""):
+def layout(title, body, prof=None, tab="", q="", bare=False):
     head = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             f'<title>{e(title)} · YakTube</title><link rel="icon" type="image/png" href="/favicon.png">'
             f'<link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.json" crossorigin="use-credentials">'
             f'<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
-            f'<meta name="apple-mobile-web-app-title" content="YakTube"><style>{CSS}</style></head><body>')
+            f'<meta name="apple-mobile-web-app-title" content="YakTube"><style>{CSS}</style></head><body{" class=bare" if bare else ""}>')
     if not prof:
         return head + f'<main>{body}</main></body></html>'
     def links(tabs, icons=True):
@@ -1434,6 +1527,7 @@ def layout(title, body, prof=None, tab="", q=""):
         f'{e(prof["name"][:1].upper())}</a></header>'
         f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}</nav><main>{body}</main></div>'
         f'<nav class="bot">{links(MAIN_TABS)}</nav>'
+        f'<nav class="tvside">{links(TV_TABS)}<!--tvrecent--><a class="me" href="/profiles">{av}<span>{e(prof["name"])}</span></a></nav>'
         + PAGE_JS + '</body></html>')
 
 
@@ -1443,8 +1537,10 @@ class App(BaseHTTPRequestHandler):
 
     # -- helpers
     def send(self, body, status=200, ctype="text/html; charset=utf-8", headers=()):
-        if isinstance(body, str) and ctype.startswith("text/html") and "YakTubeTV" in self.headers.get("User-Agent", ""):
+        if isinstance(body, str) and ctype.startswith("text/html") and self.tv():
             body = body.replace("</head>", TV_CSS + "</head>", 1)
+            if "<!--tvrecent-->" in body:                       # the rail: channels you watched lately, and its script
+                body = body.replace("<!--tvrecent-->", self.tv_recent(), 1).replace("</body>", TV_JS + "</body>", 1)
         data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -1454,6 +1550,22 @@ class App(BaseHTTPRequestHandler):
             self.send_header(k, v)
         self.end_headers()
         self.wfile.write(data)
+
+    def tv(self):
+        """The TV app (its browser says "YakTubeTV"), or a browser switched to the TV layout with ?tv=1 (?tv=0: back)."""
+        return "YakTubeTV" in self.headers.get("User-Agent", "") or "yak_tv=1" in self.headers.get("Cookie", "")
+
+    def tv_recent(self):
+        """The TV rail's "Recent channels": the last 5 channels this profile watched."""
+        rows = self.db.execute(
+            "SELECT v.channel_id, COALESCE(ch.title, MAX(v.channel_title)) AS title, MAX(h.watched_at) AS at FROM history h "
+            "JOIN videos v ON v.id=h.video_id LEFT JOIN channels ch ON ch.id=v.channel_id WHERE h.profile_id=? "
+            "AND v.channel_id IS NOT NULL GROUP BY v.channel_id ORDER BY at DESC LIMIT 5", (self.prof["id"],)).fetchall()
+        if not rows:
+            return ""
+        return '<h4>Recent channels</h4>' + "".join(
+            f'<a href="/channel?id={r["channel_id"]}"><i class="av" style="background:{COLORS[sum(map(ord, r["channel_id"])) % len(COLORS)]}">'
+            f'{e((r["title"] or "?")[:1].upper())}</i><span>{e(r["title"] or "")}</span></a>' for r in rows)
 
     def redirect(self, to, headers=()):
         self.send("", 303, headers=[("Location", to), *headers])
@@ -1505,6 +1617,8 @@ class App(BaseHTTPRequestHandler):
                 with open(APK, "rb") as f:
                     return self.send(f.read(), ctype="application/vnd.android.package-archive",
                                      headers=[("Content-Disposition", 'attachment; filename="yaktube-tv.apk"')])
+            if self.q.get("tv") in ("0", "1"):                     # preview the TV layout in a normal browser
+                return self.redirect(u.path, [("Set-Cookie", f"yak_tv={self.q['tv']}; Path=/; Max-Age=31536000; SameSite=Lax")])
             if u.path.startswith("/profiles"):
                 return getattr(self, method.lower() + "_profiles")(u.path)
             self.prof = self.profile()
@@ -1588,9 +1702,11 @@ class App(BaseHTTPRequestHandler):
         ?why=1 shows why each one is there. Never cached: coming back to it shows the picks as they are now."""
         pid = self.prof["id"]
         threading.Thread(target=warm_related, args=(pid,), daemon=True).start()
-        picks = home_feed(self.db, pid)
+        picks = home_feed(self.db, pid, 90 if self.tv() else 60)
         shorts = home_shorts(self.db, pid)
         show_why = self.q.get("why") == "1"
+        if self.tv() and picks:
+            return self.send(layout("Home", self.tv_home(picks, shorts), self.prof, "home"), headers=[("Cache-Control", "no-store")])
 
         def shelf():
             got, shorts[:] = shorts[:4], shorts[4:]
@@ -1611,6 +1727,23 @@ class App(BaseHTTPRequestHandler):
         else:
             body = f'<h1 class="sr">Home</h1><div class="grid">{"".join(parts)}</div>' + HOME_JS
         self.send(layout("Home", body, self.prof, "home"), headers=[("Cache-Control", "no-store")])
+
+    def tv_home(self, picks, shorts):
+        """Home on the TV: rows like the YouTube app on Google TV. First the top picks, then Shorts, then a row for each
+        reason with 3 or more videos ("Because you watched …", "New from your subscriptions", a search …), then the rest."""
+        groups = {}
+        for p in picks[10:]:
+            groups.setdefault(p[3], []).append(p)
+        rows = [("Recommended for you", picks[:10])] + [(k, v) for k, v in groups.items() if len(v) >= 3]
+        rest = [p for v in groups.values() if len(v) < 3 for p in v]
+        if rest:
+            rows.append(("More for you", rest))
+        out = [f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
+               + "".join(self.card(r, hide=True, src=src, why=why) for r, src, _, why in row) + '</div></section>'
+               for title, row in rows]
+        if shorts:
+            out.insert(1, f'<section class="trow"><h2>Shorts</h2><div class="strip">{"".join(short_card(v) for v in shorts)}</div></section>')
+        return '<h1 class="sr">Home</h1><div id="tvinfo"></div>' + "".join(out) + HOME_JS
 
     def impr(self):
         """Home reports the videos that were really on screen (a second or more); passed-over ones sink next time,
@@ -1754,7 +1887,8 @@ class App(BaseHTTPRequestHandler):
     def search(self):
         q = self.q.get("q", "").strip()[:200]
         if not q:
-            return self.redirect("/")
+            return self.send(layout("Search", '<form class="go big" action="/go"><input type="text" name="q" autofocus '
+                                    'placeholder="Search, or paste a YouTube link…" autocomplete="off"></form>', self.prof, "search"))
         pool = ThreadPoolExecutor(1)
         chans = pool.submit(search_channels, q)              # looked up while the videos load
         try:
@@ -1822,8 +1956,10 @@ class App(BaseHTTPRequestHandler):
         chan = f'<strong>{e(v["channel_title"] or "")}</strong>'
         if v["channel_id"] or v["channel_url"]:              # opens the channel page
             chan = f'<a class="ch" href="/channel?id={urllib.parse.quote(v["channel_id"] or v["channel_url"], safe="")}">{chan}</a>'
-        if "YakTubeTV" in self.headers.get("User-Agent", ""):
-            player = TRACK_JS + TV_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
+        if self.tv():
+            top = f'<b>{e(v["title"] or "")}</b><span>{e(" · ".join(x for x in (v["channel_title"] or "", meta) if x))}</span>'
+            acts = rate_buttons(vid, mine[0] if mine else 0) + sub + sub_later
+            player = TRACK_JS + TV_PLAYER.replace("__VID__", vid).replace("__T0__", t0).replace("__TOP__", top).replace("__ACTS__", acts)
         else:
             player = WEB_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
         body = (f'<div class="watch"><div>{player}'
@@ -1836,7 +1972,7 @@ class App(BaseHTTPRequestHandler):
                 # one tiny script: load related videos after the player has started
                 f'<script>fetch("/related?v={vid}").then(r=>r.text()).then(h=>{{document.getElementById("upnext")'
                 f'.innerHTML=h||"<p class=meta>Nothing to suggest.</p>"}})</script>')
-        self.send(layout(v["title"] or "Watch", body, self.prof))
+        self.send(layout(v["title"] or "Watch", body, self.prof, bare=True))
 
     # -- subscriptions
     def subs(self, err=""):
