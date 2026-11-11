@@ -445,12 +445,11 @@ class T(unittest.TestCase):
         self.assertIn('if(!ap||!a||nx)return', page)
         self.assertIn("#upnext a.row:not(.seen)", page)
         a.addheaders = []
-        # watch later: + on a card (asks for the new state), the button under a video, the Later page
+        # watch later: the button under a video, the Later page; cards have no + or x on their pictures
         self.assertIn("Nothing saved yet", self.get(a, "/later")[2])
         self.get(a, "/subs/add", {"url": CID})
-        self.assertIn('class="lt" data-lt="vid00000004"', self.get(a, "/feed")[2])
+        self.assertNotIn("data-lt=", self.get(a, "/feed")[2])
         self.assertEqual(post("/later/toggle", "v=vid00000004"), "1")
-        self.assertIn('class="lt on" data-lt="vid00000004"', self.get(a, "/feed")[2])
         _, url, page = self.get(a, "/later/toggle", {"v": "vid00000002", "next": "/watch?v=vid00000002"})
         self.assertIn("/watch?v=vid00000002", url)
         self.assertIn("Saved ✓", page)
@@ -471,7 +470,8 @@ class T(unittest.TestCase):
         self.play(a, "srch0000001")
         self.get(a, "/related?v=srch0000001")
         page = self.get(a, "/foryou")[2]
-        self.assertIn('data-no="rel00000000"', page)
+        self.assertIn("Related 0", page)
+        self.assertNotIn("data-no=", page)
         post("/hide", "v=rel00000000")
         page = self.get(a, "/foryou")[2]
         self.assertNotIn("Related 0", page)

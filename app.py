@@ -1003,15 +1003,8 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .card:hover h3{color:var(--accent)}
 [data-ch]:hover,a.ch:hover{color:var(--fg);text-decoration:underline}
 .th{position:relative;display:block}
-.lt,.no{position:absolute;top:6px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;
-  display:grid;place-items:center;font-size:15px;line-height:1;opacity:0;transition:opacity .12s}
-.lt{right:6px}.no{left:6px}
 .dur{position:absolute;right:6px;bottom:6px;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.8);color:#fff;
-  font-size:12px;font-weight:600;line-height:1.45;pointer-events:none}.card:hover .lt,.card:hover .no,.lt.on{opacity:1}
-@media (hover:none){.lt,.no{opacity:.9}}
-.gone{display:grid;place-items:center;align-content:center;gap:8px;aspect-ratio:16/9;border-radius:10px;background:var(--card);
-  box-shadow:0 0 0 1px var(--line);color:var(--muted);font-size:13px;text-align:center}
-.gone b{color:var(--fg);cursor:pointer}.gone b:hover{text-decoration:underline}
+  font-size:12px;font-weight:600;line-height:1.45;pointer-events:none}
 .note{background:var(--card);box-shadow:0 0 0 1px var(--line);padding:10px 14px;border-radius:10px;margin-bottom:16px}
 .imp{margin:-6px 0 18px}.imp summary{cursor:pointer}.imp form{max-width:560px;margin-top:10px}
 .imp textarea{display:block;width:100%;margin:10px 0;padding:10px 14px;border:1px solid var(--line);border-radius:12px;
@@ -1103,7 +1096,7 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
-a[target=_blank],.lt:not(.on),.no,.imp{display:none}
+a[target=_blank],.imp{display:none}
 .watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:100vh;overflow:hidden}.tvp{position:relative}
 .tvbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:48px 22px 18px;
 border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .5s}.tvbar.hide{opacity:0}
@@ -1415,7 +1408,7 @@ def thumb(vid):
     return f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
 
 
-def card(v, seen=False, saved=False, hide=False, src=None, why=None):
+def card(v, seen=False, src=None, why=None):
     short = "short" in v.keys() and v["short"]
     meta = " · ".join(x for x in ("Short" if short else "", views(v["views"]), ago(v["published"])) if x)
     href = ("/shorts?v=" if short else "/watch?v=") + v["id"]   # Shorts open in the full-screen Shorts player
@@ -1423,11 +1416,9 @@ def card(v, seen=False, saved=False, hide=False, src=None, why=None):
     # so the TV remote still steps from video to video
     cid = v["channel_id"] if "channel_id" in v.keys() else None
     ch = f'<span data-ch="{cid}">{e(v["channel_title"] or "")}</span>' if cid and CID_RE.fullmatch(cid) else e(v["channel_title"] or "")
-    extra = "" if short else (f'<span class="lt{" on" if saved else ""}" data-lt="{v["id"]}" title="Watch later">{"✓" if saved else "＋"}</span>'
-                              + (f'<span class="no" data-no="{v["id"]}" title="Not interested">✕</span>' if hide else ""))
     tag = f' data-v="{v["id"]}" data-s="{src}"' if src else ""     # Home: reports when it's been on screen
     length = "" if short or "length" not in v.keys() else clock(v["length"])
-    extra = (f'<span class="dur">{length}</span>' if length else "") + extra   # how long, bottom right
+    extra = f'<span class="dur">{length}</span>' if length else ""   # how long, bottom right
     return (f'<a class="card{" seen" if seen else ""}" href="{href}"{tag}>'
             f'<span class="th"><img loading="lazy" src="{thumb(v["id"])}" alt="">{extra}</span><h3>{e(v["title"] or v["id"])}</h3>'
             f'<div class="meta">{ch}</div><div class="meta">{meta}</div>'
@@ -1468,19 +1459,12 @@ def side_row(r, seen=False):
 
 # One small script on every page: "/" jumps to the search box, and the bits of a video card that aren't links of
 # their own (so the TV remote still steps from video to video) react to a click or tap: the channel name opens its
-# page, + saves for later, x means "not interested".
+# page.
 PAGE_JS = """<script>addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))
 {k.preventDefault();document.querySelector(".go input").focus()}});
 addEventListener("click",k=>{var t=k.target,c;if(!t.closest)return;
 function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b}).then(r=>r.text())}
-if(c=t.closest("[data-lt]")){k.preventDefault();post("/later/toggle","v="+c.dataset.lt).then(s=>{c.classList.toggle("on",s=="1");c.textContent=s=="1"?"\u2713":"\uff0b"})}
-else if(c=t.closest("[data-no]")){k.preventDefault();var a=c.closest(".card"),ch=a.querySelector("[data-ch]"),g=document.createElement("div");
-g.className="gone";g.card=a;g.innerHTML="<span>Hidden from your suggestions</span>"+(ch?"<b data-hc='"+ch.dataset.ch+"'>Hide this whole channel</b>":"")+"<b data-un='"+c.dataset.no+"'>Undo</b>";
-post("/hide","v="+c.dataset.no);a.style.display="none";a.after(g)}
-else if(c=t.closest("[data-hc]")){var g=c.parentNode;g.hc=c.dataset.hc;post("/hide","c="+g.hc);c.replaceWith("Channel hidden too");
-document.querySelectorAll('.card [data-ch="'+g.hc+'"]').forEach(x=>{x.closest(".card").style.display="none"})}
-else if(c=t.closest("[data-un]")){var g=c.parentNode;post("/hide","undo=1&v="+c.dataset.un+(g.hc?"&c="+g.hc:"")).then(()=>{if(g.hc)location.reload();else{g.card.style.display="";g.remove()}})}
-else if(c=t.closest("[data-rate]")){k.preventDefault();var g=c.parentNode;
+if(c=t.closest("[data-rate]")){k.preventDefault();var g=c.parentNode;
 post("/rate","v="+g.dataset.v+"&r="+c.dataset.rate).then(s=>{g.querySelectorAll("[data-rate]").forEach(b=>{b.classList.toggle("on",b.dataset.rate==s);b.setAttribute("aria-pressed",b.dataset.rate==s)})})}
 else if(c=t.closest("[data-ch]")){k.preventDefault();location.href="/channel?id="+c.dataset.ch}});
 // Subscribe / Watch later buttons (form class="js") change in place, so a playing video isn't interrupted.
@@ -1639,10 +1623,8 @@ class App(BaseHTTPRequestHandler):
             return self.db.execute("SELECT * FROM profiles WHERE id=?", (int(ck["yak_profile"].value),)).fetchone()
         return None
 
-    def card(self, v, seen=False, hide=False, src=None, why=None):
-        if self._later is None:                              # this profile's Watch later list, read once per page
-            self._later = {r[0] for r in self.db.execute("SELECT video_id FROM later WHERE profile_id=?", (self.prof["id"],))}
-        return card(v, seen, v["id"] in self._later, hide, src, why)
+    def card(self, v, seen=False, src=None, why=None):
+        return card(v, seen, src, why)
 
     def back(self, f, fallback=None):
         """After a form: go back to the page it came from (only ever a path on this site)."""
@@ -1663,7 +1645,6 @@ class App(BaseHTTPRequestHandler):
     def route(self, method):
         u = urllib.parse.urlsplit(self.path)
         self.q = {k: v[0] for k, v in urllib.parse.parse_qs(u.query).items()}
-        self._later = None
         self.db = connect()
         try:
             if u.path == "/healthz":
@@ -1775,7 +1756,7 @@ class App(BaseHTTPRequestHandler):
         for i, (r, src, score, reason) in enumerate(picks):
             if i in (8, 20, 32, 44) and shorts:   # groups of 4, spread through the feed
                 parts.append(shelf())
-            parts.append(self.card(r, hide=True, src=src, why=f"{reason} · {score:.2f}" if show_why else None))
+            parts.append(self.card(r, src=src, why=f"{reason} · {score:.2f}" if show_why else None))
         if shorts and len(picks) <= 8:
             parts.append(shelf())
         if not picks:
@@ -1820,7 +1801,7 @@ class App(BaseHTTPRequestHandler):
                 + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
         return '<h1 class="sr">Home</h1>' + "".join(
             f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
-            + "".join(short_card(p) if title == "Shorts" else self.card(p[0], hide=True, src=p[1], why=p[3]) for p in row)
+            + "".join(short_card(p) if title == "Shorts" else self.card(p[0], src=p[1], why=p[3]) for p in row)
             + '</div></section>' for title, row in rows if row) + HOME_JS
 
     def impr(self):
@@ -1863,7 +1844,7 @@ class App(BaseHTTPRequestHandler):
             self.db.executemany("INSERT OR IGNORE INTO shown(profile_id,video_id,first_at) VALUES(?,?,?)",
                                 [(self.prof["id"], r["id"], int(time.time())) for r in rows])
             body = (f'<div class="bar"><h1>New to you</h1><span class="meta">Channels you haven\'t watched yet · '
-                    f'new picks through the day</span></div><div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
+                    f'new picks through the day</span></div><div class="grid">{"".join(self.card(r) for r in rows)}</div>')
         self.send(layout("New to you", body, self.prof, "new"))
 
     def shorts(self):
@@ -1917,8 +1898,7 @@ class App(BaseHTTPRequestHandler):
             body = (f'<div class="bar"><h1>Watch later</h1><span class="meta">Leaves the list once you\'ve watched it to the end</span></div>'
                     f'<div class="grid">{"".join(self.card(r, r["seen"]) for r in rows)}</div>')
         else:
-            body = ('<div class="empty"><h1>Nothing saved yet</h1><p>Use ＋ on a video\'s picture, or the Watch later button '
-                    'under a video, to keep it here for another time.</p><a class="btn" href="/">Back to your feed</a></div>')
+            body = ('<div class="empty"><h1>Nothing saved yet</h1><p>Use the Watch later button under a video to keep it here for another time.</p><a class="btn" href="/">Back to your feed</a></div>')
         self.send(layout("Watch later", body, self.prof, "later"))
 
     def later_toggle(self):
