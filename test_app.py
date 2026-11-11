@@ -686,6 +686,34 @@ class T(unittest.TestCase):
         self.assertEqual(ids, ["vid00000003", "shr00000002"])                           # watched ones are gone
         ids = re.findall(r'"id": "(\w{11})"', self.get(a, "/shorts?v=shr00000002")[2])
         self.assertEqual(ids[0], "shr00000002")                                         # a chosen one goes first
+        # thumbs steer the list by channel name: liked channels move up, thumbed-down ones leave
+        c = app.connect()
+        out = [f"thb{i:08d}" for i in range(40)]
+        app.store_videos(c, [{"id": v, "title": f"Thumb {i}", "channel_title": "Cats" if i in (5, 35) else
+                              "Dogs" if i in (6, 36) else f"Chan {i}", "published": int(time.time()), "short": 1}
+                             for i, v in enumerate(out)])
+        c.close()
+        app.OUTSIDE[:] = out
+        post = lambda b: a.open(self.base + "/rate", b.encode()).read().decode()
+        self.assertEqual(post("v=thb00000005&r=1"), "1")                                # like a Cats short...
+        self.assertEqual(post("v=thb00000006&r=-1"), "-1")                              # ...thumb down a Dogs one
+        ids = re.findall(r'"id": "(\w{11})"', self.get(a, "/shorts")[2])
+        self.assertNotIn("thb00000006", ids)
+        self.assertNotIn("thb00000036", ids)                                            # all of Dogs is gone
+        self.assertLess(ids.index("thb00000035"), ids.index("thb00000010"))             # Cats' other short moved up
+        self.assertLess(ids.index("thb00000000"), ids.index("thb00000035"))             # ...but not to the very top
+        post("v=thb00000006&r=-1")                                                      # taking the thumb back...
+        self.assertIn("thb00000036", re.findall(r'"id": "(\w{11})"', self.get(a, "/shorts")[2]))   # ...brings Dogs back
+        c = app.connect()
+        pid = c.execute("SELECT id FROM profiles WHERE name='Shorty'").fetchone()[0]
+        c.execute("UPDATE videos SET channel_id=? WHERE id='thb00000005'", (CID,))
+        app.mark_watched(c, pid, "thb00000005")                                         # watched AND rated: still counts
+        self.assertGreater(app.Taste(c, pid, time.time()).chan.get(CID, 0), 0)
+        c.execute("DELETE FROM videos WHERE id LIKE 'thb%'")                            # tidy up for later tests
+        c.execute("DELETE FROM ratings WHERE video_id LIKE 'thb%'")
+        c.execute("DELETE FROM history WHERE video_id LIKE 'thb%'")
+        c.commit()
+        c.close()
         s, url, _ = self.get(a, "/go?q=" + urllib.parse.quote("https://youtube.com/shorts/shr00000002"))
         self.assertTrue(url.endswith("/shorts?v=shr00000002"))
         app.OUTSIDE[:] = []

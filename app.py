@@ -335,12 +335,19 @@ def refresh_outside(max_age=3600, pages=5, keep=200):
 
 def shorts_for(c, pid, first=None, limit=300):
     """Shorts from outside your subscriptions (what YouTube shows a visitor who isn't logged in),
-    newest batch first, minus ones you've watched."""
+    newest batch first, minus ones you've watched. Your thumbs steer it by channel (a thumb down outweighs
+    a thumb up): channels you've mostly thumbed down drop out, and ones you've liked move up the list."""
     ids = OUTSIDE[:]
     found = {r["id"]: r for r in c.execute(
         f"SELECT id, title, channel_title FROM videos WHERE id IN ({','.join('?' * len(ids))}) AND id NOT IN "
         "(SELECT video_id FROM history WHERE profile_id=?)", ids + [pid])} if ids else {}
-    out = [found[v] for v in ids if v in found]
+    score = {}      # by channel name: Shorts from outside your subscriptions come with a name but no channel id
+    for name, val in c.execute("SELECT v.channel_title, r.val FROM ratings r JOIN videos v ON v.id=r.video_id "
+                               "WHERE r.profile_id=? AND v.channel_title!=''", (pid,)):
+        score[name] = score.get(name, 0) + (1 if val > 0 else -1.5)
+    out = [found[v] for v in ids if v in found and score.get(found[v]["channel_title"], 0) >= 0]
+    lift = lambda r: 30 * min(score.get(r["channel_title"], 0), 3)     # up to 90 places for a favourite
+    out = [r for _, r in sorted(enumerate(out), key=lambda p: p[0] - lift(p[1]))]
     if first:
         out = [ensure_video(c, first)] + [r for r in out if r["id"] != first]
     return [{"id": r["id"], "title": r["title"] or "", "channel": r["channel_title"] or ""} for r in out[:limit]]
@@ -650,8 +657,8 @@ class Taste:
             self.eng[r["video_id"]] = e
             self.add(r["channel_id"], r["title"], e * .5 ** ((now - (r["watched_at"] or now)) / (45 * DAY)))
         for r in c.execute("SELECT v.channel_id, v.title, r.val FROM ratings r JOIN videos v ON v.id=r.video_id "
-                           "WHERE r.profile_id=? AND r.video_id NOT IN (SELECT video_id FROM history WHERE profile_id=?)",
-                           (pid, pid)):                                   # rated without watching (Shorts, mostly)
+                           "WHERE r.profile_id=? AND (v.short=1 OR r.video_id NOT IN (SELECT video_id FROM history WHERE profile_id=?))",
+                           (pid, pid)):     # rated without watching, and any rated Short (watching one counts for nothing)
             self.add(r["channel_id"], r["title"], 1 if r["val"] > 0 else -1.5)
         self.top = max([v for v in self.chan.values() if v > 0], default=1)
 
