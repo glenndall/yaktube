@@ -51,12 +51,12 @@ one and keeps the address and profile.
 
 **The TV layout** is laid out like the YouTube app on Google TV:
 - A rail of icons down the left: your profile (Switch profile) at the top, then Search, Home, Shorts, Subscriptions,
-  Later, History, New to you, Channels, and your recently watched channels at the bottom. It widens with names when
+  Later, History, Channels, and your recently watched channels at the bottom. It widens with names when
   the remote moves into it.
-- Shorts with the remote: Up / Down change Short, OK pauses, Right goes to the thumbs and Share (Up / Down between
+- Shorts with the remote: Up / Down change Short, OK pauses, Right goes to the thumbs (Up / Down between
   them, OK presses one, Left goes back), Left goes to ✕ (OK closes).
-- Home is rows you scroll sideways: *Recommended for you*, *Shorts*, then a row for each reason (*Because you watched …*,
-  *New from your subscriptions*, *From your search …*). The selected video's title, channel and reason show above them.
+- Home is rows you scroll sideways: *Recommended for you*, *New from your subscriptions*, *New to you*, then a row
+  for each reason (*Because you watched …*, *From your search …*). No Shorts row: Shorts have their own place in the rail. The selected video's title, channel and reason show above them.
 - Remote: Left / Right along a row, Up / Down between rows (each row remembers where you were), Left at the start of a
   row opens the rail, Right leaves it. The rail is hidden while a video plays.
 - The video player shows the title on top and, along the bottom, a progress bar (select it, then Left / Right jump

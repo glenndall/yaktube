@@ -1052,7 +1052,7 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 .tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}
 .tvside .me{min-height:62px;margin-bottom:10px}.tvside .me span{line-height:1.2}.tvside .me small{display:block;font-size:12px;color:#888}
 .tvside a.me:focus small{color:#555}.tvside h4{border-top:1px solid #2a2a2a;padding-top:16px}
-.bare .tvside{display:none}.bare main{padding:0}
+.bare .tvside{display:none}#sr{display:none}   /* Shorts: no Share button on the TV */.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
 #tvinfo{position:sticky;top:0;z-index:5;min-height:150px;padding:8px 6px 28px;background:linear-gradient(#111 78%,rgba(17,17,17,0))}
@@ -1510,7 +1510,7 @@ MORE_TABS = (("new", "/new", "New to you"), ("later", "/later", "Later"), ("subs
 # The TV's rail down the left, in the order YouTube's Google TV app now uses: search, then the places you go most.
 TV_TABS = (("search", "/search", "Search"), ("home", "/", "Home"), ("shorts", "/shorts", "Shorts"),
            ("feed", "/feed", "Subscriptions"), ("later", "/later", "Later"), ("hist", "/history", "History"),
-           ("new", "/new", "New to you"), ("subs", "/subs", "Channels"))
+           ("subs", "/subs", "Channels"))                                     # (New to you is a row on Home)
 
 
 def rate_buttons(vid, val):
@@ -1720,10 +1720,10 @@ class App(BaseHTTPRequestHandler):
         pid = self.prof["id"]
         threading.Thread(target=warm_related, args=(pid,), daemon=True).start()
         picks = home_feed(self.db, pid, 90 if self.tv() else 60)
+        if self.tv() and picks:                               # (Shorts have their own place in the TV's rail)
+            return self.send(layout("Home", self.tv_home(picks), self.prof, "home"), headers=[("Cache-Control", "no-store")])
         shorts = home_shorts(self.db, pid)
         show_why = self.q.get("why") == "1"
-        if self.tv() and picks:
-            return self.send(layout("Home", self.tv_home(picks, shorts), self.prof, "home"), headers=[("Cache-Control", "no-store")])
 
         def shelf():
             got, shorts[:] = shorts[:4], shorts[4:]
@@ -1745,22 +1745,41 @@ class App(BaseHTTPRequestHandler):
             body = f'<h1 class="sr">Home</h1><div class="grid">{"".join(parts)}</div>' + HOME_JS
         self.send(layout("Home", body, self.prof, "home"), headers=[("Cache-Control", "no-store")])
 
-    def tv_home(self, picks, shorts):
-        """Home on the TV: rows like the YouTube app on Google TV. First the top picks, then Shorts, then a row for each
-        reason with 3 or more videos ("Because you watched …", "New from your subscriptions", a search …), then the rest."""
+    def tv_home(self, picks):
+        """Home on the TV: rows like the YouTube app on Google TV. Recommended for you (the top picks), New from your
+        subscriptions (newest first), New to you, then a row for each reason with 3 or more videos ("Because you
+        watched …", "From your search …"), then the rest. No Shorts row: Shorts have their own place in the rail."""
+        pid = self.prof["id"]
+        ntu = new_to_you(self.db, pid, 20)
+        self.db.executemany("INSERT OR IGNORE INTO shown(profile_id,video_id,first_at) VALUES(?,?,?)",   # so it turns over
+                            [(pid, r["id"], int(time.time())) for r in ntu])
+        ntu_ids = {r["id"] for r in ntu}
+        picks = [p for p in picks if p[0]["id"] not in ntu_ids and p[1] != "explore"]
+        subs = [p for p in picks if p[1] == "subs"]
+        rest = [p for p in picks if p[1] != "subs"]
+        if len(subs) < 8:                                     # top up with the newest unwatched uploads
+            have = {p[0]["id"] for p in picks} | ntu_ids
+            no_vids, no_chans = hidden_sets(self.db, pid)
+            for r in self.db.execute(
+                    "SELECT v.* FROM videos v JOIN subs s ON s.channel_id=v.channel_id AND s.profile_id=? WHERE v.short=0 "
+                    "AND v.id NOT IN (SELECT video_id FROM history WHERE profile_id=?) ORDER BY v.published DESC LIMIT 60",
+                    (pid, pid)):
+                if r["id"] not in have and r["id"] not in no_vids and r["channel_id"] not in no_chans:
+                    subs.append((r, "subs", 0, WHY["subs"]))
+                    if len(subs) >= 12:
+                        break
+        subs.sort(key=lambda p: p[0]["published"] or 0, reverse=True)
         groups = {}
-        for p in picks[10:]:
+        for p in rest[10:]:
             groups.setdefault(p[3], []).append(p)
-        rows = [("Recommended for you", picks[:10])] + [(k, v) for k, v in groups.items() if len(v) >= 3]
-        rest = [p for v in groups.values() if len(v) < 3 for p in v]
-        if rest:
-            rows.append(("More for you", rest))
-        out = [f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
-               + "".join(self.card(r, hide=True, src=src, why=why) for r, src, _, why in row) + '</div></section>'
-               for title, row in rows]
-        if shorts:
-            out.insert(1, f'<section class="trow"><h2>Shorts</h2><div class="strip">{"".join(short_card(v) for v in shorts)}</div></section>')
-        return '<h1 class="sr">Home</h1><div id="tvinfo"></div>' + "".join(out) + HOME_JS
+        rows = ([("Recommended for you", rest[:10]), ("New from your subscriptions", subs),
+                 ("New to you", [(r, "explore", 0, WHY["explore"]) for r in ntu])]
+                + [(k, v) for k, v in groups.items() if len(v) >= 3]
+                + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
+        return '<h1 class="sr">Home</h1><div id="tvinfo"></div>' + "".join(
+            f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
+            + "".join(self.card(r, hide=True, src=src, why=why) for r, src, _, why in row) + '</div></section>'
+            for title, row in rows if row) + HOME_JS
 
     def impr(self):
         """Home reports the videos that were really on screen (a second or more); passed-over ones sink next time,

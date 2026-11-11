@@ -265,7 +265,8 @@ class T(unittest.TestCase):
         pid = db.execute("SELECT id FROM profiles WHERE name='TVrows'").fetchone()[0]
         now = int(time.time())
         db.execute("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES('tvwatched01',?, 'Watched on TV')", (CID2,))
-        rows = [(f"tvr{i:08d}", "UC" + "%02d" % i * 11, f"TV pick {i}") for i in range(20)]
+        rows = ([(f"tvr{i:08d}", CID2, f"TV pick {i}") for i in range(16)]           # a channel you know...
+                + [(f"tvn{i:08d}", "UC" + "%02d" % i * 11, f"TV new {i}") for i in range(6)])   # ...and 6 you don't
         db.executemany("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES(?,?,?)", rows)
         db.executemany("INSERT OR REPLACE INTO related(src,video_id,pos) VALUES('tvwatched01',?,?)", [(r[0], i) for i, r in enumerate(rows)])
         db.execute("INSERT OR REPLACE INTO related_src VALUES('tvwatched01', ?)", (now,))
@@ -278,18 +279,32 @@ class T(unittest.TestCase):
         self.assertIn('<div id="tvinfo">', page)                       # the focused video's details
         self.assertIn('<h2>Recommended for you</h2>', page)            # rows like the Google TV app
         self.assertIn('<h2>Because you watched Watched on TV</h2>', page)
+        self.assertIn('<h2>New to you</h2>', page)                     # its own row, not in the rail
+        self.assertEqual(page.count('href="/watch?v=tvn'), 6)          # each new channel once, nowhere else
+        self.assertTrue(all(page.index('<h2>New to you</h2>') < page.index(f'href="/watch?v=tvn{i:08d}"') for i in range(6)))
+        self.assertNotIn('<h2>Shorts</h2>', page)                      # Shorts have their own place in the rail
+        self.assertNotIn('class="scard"', page)
         self.assertIn('class="tvside"', page)
         rail = page[page.index('class="tvside"'):]
-        for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "New to you", "Channels"):
+        for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "Channels"):
             self.assertIn(f"<span>{label}</span>", rail)
+        self.assertNotIn("<span>New to you</span>", rail)
         self.assertLess(rail.index("<span>Search"), rail.index("<span>Home"))
         self.assertLess(rail.index("Switch profile"), rail.index("<span>Search"))   # profile at the top...
         self.assertLess(rail.index("<span>Channels"), rail.index("Recent channels"))   # ...recent channels at the bottom
         self.assertIn("Recent channels", rail)                          # channels you watched lately
         self.assertIn(f'href="/channel?id={CID2}"', rail)
         self.assertIn('stopImmediatePropagation', page)                 # the remote: rows and rail
+        self.get(a, "/subs/add", {"url": "@woz"})
+        page = self.get(a, "/")[2]
+        h2 = re.findall(r"<h2>([^<]*)</h2>", page)
+        self.assertEqual(h2[:3], ["Recommended for you", "New from your subscriptions", "New to you"])
         self.assertIn('class=bare', self.get(a, "/watch?v=tvwatched01")[2])   # no rail while a video plays
         self.assertIn('class="go big"', self.get(a, "/search")[2])     # Search: a big box
+        self.assertIn("#sr{display:none}", self.get(a, "/shorts")[2])  # Shorts: no Share button on the TV
+        a.addheaders = []
+        self.assertNotIn("#sr{display:none}", self.get(a, "/shorts")[2])   # (phones and computers keep it)
+        a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         # a normal browser can preview the TV layout
         b = self.login("TVpreview")
         _, url, page = self.get(b, "/feed?tv=1")
