@@ -303,9 +303,9 @@ class T(unittest.TestCase):
         self.assertIn(".strip .scard img{aspect-ratio:9/16", page)      # tall, like YouTube's TV app
         self.assertIn('class=bare', self.get(a, "/watch?v=tvwatched01")[2])   # no rail while a video plays
         self.assertIn('class="go big"', self.get(a, "/search")[2])     # Search: a big box
-        self.assertIn("#sr{display:none}", self.get(a, "/shorts")[2])  # Shorts: no Share button on the TV
+        self.assertIn("#rt #sr{display:none!important}", self.get(a, "/shorts")[2])  # Shorts: no Share button on the TV
         a.addheaders = []
-        self.assertNotIn("#sr{display:none}", self.get(a, "/shorts")[2])   # (phones and computers keep it)
+        self.assertNotIn("#rt #sr{display:none", self.get(a, "/shorts")[2])   # (phones and computers keep it)
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         # a normal browser can preview the TV layout
         b = self.login("TVpreview")

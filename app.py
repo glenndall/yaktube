@@ -1074,7 +1074,7 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 .tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}
 .tvside .me{min-height:62px;margin-bottom:10px}.tvside .me span{line-height:1.2}.tvside .me small{display:block;font-size:12px;color:#888}
 .tvside a.me:focus small{color:#555}.tvside h4{border-top:1px solid #2a2a2a;padding-top:16px}
-.bare .tvside{display:none}#sr{display:none}   /* Shorts: no Share button on the TV */.bare main{padding:0}
+.bare .tvside{display:none}#rt #sr{display:none!important}   /* Shorts: no Share button on the TV (beats Shorts' own button style) */.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
 .trow{margin:0 0 2px;scroll-margin-top:6px}.trow h2{font-size:15px;margin:0 0 0 8px;font-weight:600;color:#ddd}
