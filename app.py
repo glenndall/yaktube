@@ -1526,7 +1526,8 @@ else{var R=rows(),n=R[R.indexOf(r)+(d=="ArrowDown"?1:-1)];if(n){var m=items(n);p
 var f=document.querySelector(".trow .strip>a");if(f&&(!document.activeElement||document.activeElement==document.body))put(f)})()</script>"""
 
 # On the TV, holding OK on a video (for half a second) opens a menu: Not interested, Watch later and its channel.
-# A short press still opens the video: OK on a video waits for the button to come back up before acting.
+# A short press still opens the video. In a browser, OK on a video waits for the key to come back up before acting;
+# the TV app does that part itself and calls yakHold().
 TV_MENU_JS = """<script>(function(){var held=null,tm=0,menu=null,from=null,tt=0;
 function card(a){return a&&a.closest?a.closest("a.card,a.scard"):null}
 function vid(a){var m=/[?&]v=([A-Za-z0-9_-]{11})/.exec(a.getAttribute("href")||"");return m?m[1]:null}
@@ -1557,6 +1558,8 @@ addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,c;
   if(d=="Enter"&&(c=card(a))){stop(k);if(!k.repeat){clearTimeout(tm);held=c;tm=setTimeout(function(){tm=0;show(c)},500)}}},true);
 addEventListener("keyup",function(k){if(k.key!="Enter"||!held)return;stop(k);var c=held;held=null;
   if(tm){clearTimeout(tm);tm=0;c.click()}},true);
+// The TV app watches OK itself (its WebView only passes OK on once it's let go) and calls this when it's held.
+window.yakHold=function(){var c=card(document.activeElement);if(!c||menu)return false;clearTimeout(tm);held=null;show(c);return true};
 var ob=window.yakBack;window.yakBack=function(){if(menu){shut();return true}return ob?ob():false}})()</script>"""
 
 # Navigation icons (24x24, filled with the text colour).

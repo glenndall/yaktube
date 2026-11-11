@@ -5,7 +5,10 @@ import android.app.AlertDialog;
 import android.content.SharedPreferences;
 import android.graphics.Color;
 import android.os.Bundle;
+import android.os.Handler;
+import android.os.Looper;
 import android.text.InputType;
+import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.webkit.CookieManager;
@@ -18,7 +21,8 @@ import android.webkit.WebViewClient;
 import android.widget.EditText;
 import android.widget.FrameLayout;
 
-/** YakTube TV: shows the YakTube website full-screen and makes the remote's arrow keys move between things. */
+/** YakTube TV: shows the YakTube website full-screen, makes the remote's arrow keys move between things,
+ *  and tells the page when OK is held down. */
 public class MainActivity extends Activity {
     // No address is built in: the app asks for it on first launch and keeps it on the TV.
 
@@ -150,6 +154,62 @@ public class MainActivity extends Activity {
         else if (saved == null || web.restoreState(saved) == null) web.loadUrl(home());
     }
 
+    // Holding OK. The WebView only hands OK to the page once it's let go, so the page can't tell a hold from a press.
+    // The app watches OK itself: let go within half a second and the press goes on to the page as usual; hold it and
+    // the page is asked to open its menu for the selected video (yakHold). If the page has no menu there, the
+    // release still counts as a normal press.
+    static final long HOLD_MS = 500;
+    final Handler hold = new Handler(Looper.getMainLooper());
+    KeyEvent okDown;      // the OK press being held, not passed on yet
+    boolean okLong;       // held long enough: the page has been asked
+    Boolean okTaken;      // the page's answer: true = it opened its menu, false = nothing to hold, null = not back yet
+    KeyEvent okWaiting;   // let go before the page answered: pass this press on if the answer is no
+
+    final Runnable okHeld = () -> {
+        if (okDown == null) return;
+        okLong = true;
+        okTaken = null;
+        web.evaluateJavascript("window.yakHold?yakHold():false", r -> {
+            okTaken = "true".equals(r);
+            if (!okTaken && okWaiting != null) press(okWaiting);
+            okWaiting = null;
+        });
+    };
+
+    static boolean isOk(int c) {
+        return c == KeyEvent.KEYCODE_DPAD_CENTER || c == KeyEvent.KEYCODE_ENTER || c == KeyEvent.KEYCODE_NUMPAD_ENTER;
+    }
+
+    /** Passes a whole OK press (down, then up) on to the page. */
+    void press(KeyEvent down) {
+        super.dispatchKeyEvent(down);
+        super.dispatchKeyEvent(KeyEvent.changeAction(down, KeyEvent.ACTION_UP));
+    }
+
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (full != null || !isOk(e.getKeyCode())) return super.dispatchKeyEvent(e);
+        if (e.getAction() == KeyEvent.ACTION_DOWN) {
+            if (e.getRepeatCount() == 0 && okDown == null) {
+                okDown = e;
+                okLong = false;
+                okWaiting = null;
+                hold.postDelayed(okHeld, HOLD_MS);
+            }
+            return true;                                   // held: wait and see
+        }
+        if (e.getAction() == KeyEvent.ACTION_UP && okDown != null) {
+            KeyEvent d = okDown;
+            okDown = null;
+            hold.removeCallbacks(okHeld);
+            if (!okLong) press(d);                         // a short press
+            else if (okTaken == null) okWaiting = d;       // the page hasn't answered yet
+            else if (!okTaken) press(d);                   // nothing to hold there: a normal press
+            return true;
+        }
+        return super.dispatchKeyEvent(e);
+    }
+
     @Override
     public void onBackPressed() {
         if (full != null) {
@@ -172,6 +232,9 @@ public class MainActivity extends Activity {
     @Override
     protected void onPause() {
         super.onPause();
+        hold.removeCallbacks(okHeld);                     // a press cut short by leaving the app is forgotten
+        okDown = null;
+        okWaiting = null;
         CookieManager.getInstance().flush(); // stay signed in (e.g. a login page in front of YakTube) and keep the profile
         web.onPause();
     }

@@ -297,6 +297,7 @@ class T(unittest.TestCase):
         self.assertIn('stopImmediatePropagation', page)                 # the remote: rows and rail
         self.assertIn('menu.className="tvlm"', page)                     # hold OK on a video: a menu
         self.assertIn('fetch("/vstate?v="', page)
+        self.assertIn("window.yakHold=function", page)                     # the TV app calls this when OK is held
         self.assertNotIn("TV_MENU", web)
         self.assertNotIn('"tvlm"', web)                                  # (only on the TV)
         post = lambda path, body: a.open(self.base + path, body.encode())
