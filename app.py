@@ -83,6 +83,8 @@ def init_db():
         c.execute("ALTER TABLE profiles ADD COLUMN feed_shorts INTEGER DEFAULT 1")       # Feed shows subs' Shorts
     if "pos" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:            # added Nov 2026
         c.execute("ALTER TABLE history ADD COLUMN pos INTEGER DEFAULT 0")                # seconds in, to resume from
+    if "length" not in [r[1] for r in c.execute("PRAGMA table_info(videos)")]:          # added Nov 2026: seconds long,
+        c.execute("ALTER TABLE videos ADD COLUMN length INTEGER DEFAULT 0")              # for the duration on pictures
     if "best" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:           # added Nov 2026: how much of it
         c.execute("ALTER TABLE history ADD COLUMN best INTEGER DEFAULT 0")               # was watched (furthest point)
         c.execute("ALTER TABLE history ADD COLUMN dur INTEGER DEFAULT 0")                # and how long it is
@@ -176,20 +178,35 @@ def num(text):
     return int(float(m.group(1).replace(",", "")) * {"K": 1e3, "M": 1e6, "B": 1e9}.get(m.group(2), 1))
 
 
+LEN_RE = re.compile(r"\d{1,2}(?::\d{2}){1,2}")          # a video's length as YouTube writes it: 4:05, 1:02:33
+
+
+def secs(text):
+    """'1:02:33' -> 3753 seconds (0 if it isn't a length)."""
+    if not LEN_RE.fullmatch(text or ""):
+        return 0
+    n = 0
+    for part in text.split(":"):
+        n = n * 60 + int(part)
+    return n
+
+
 def parse_items(d):
     """Pull plain video dicts out of ytInitialData (both old and new layouts). Shorts are skipped."""
     out, seen = [], set()
 
-    def add(vid, title, cid, ctitle, when, views_):
+    def add(vid, title, cid, ctitle, when, views_, length=""):
         if vid and VID_RE.match(vid) and vid not in seen:
             seen.add(vid)
             out.append({"id": vid, "title": title, "channel_id": cid if cid and CID_RE.fullmatch(cid) else None,
-                        "channel_title": ctitle, "published": rel_ts(when), "views": num(views_), "short": 0})
+                        "channel_title": ctitle, "published": rel_ts(when), "views": num(views_), "short": 0,
+                        "length": secs(length)})
     for r in walk(d, "videoRenderer"):               # search results
         by = ((r.get("longBylineText") or r.get("ownerText") or {}).get("runs") or [{}])[0]
         add(r.get("videoId"), "".join(x.get("text", "") for x in r.get("title", {}).get("runs", [])),
             by.get("navigationEndpoint", {}).get("browseEndpoint", {}).get("browseId"), by.get("text", ""),
-            r.get("publishedTimeText", {}).get("simpleText", ""), r.get("viewCountText", {}).get("simpleText", ""))
+            r.get("publishedTimeText", {}).get("simpleText", ""), r.get("viewCountText", {}).get("simpleText", ""),
+            r.get("lengthText", {}).get("simpleText", ""))
     for lk in walk(d, "lockupViewModel"):            # channel pages, up-next lists
         if lk.get("contentType") != "LOCKUP_CONTENT_TYPE_VIDEO":
             continue
@@ -201,7 +218,7 @@ def parse_items(d):
         vws = next((p for p in parts if re.fullmatch(r"[\d.,]+\s*[KMB]?( views)?", p)), "")
         ctitle = rows[0][0] if len(rows) > 1 and rows[0] else ""
         add(lk.get("contentId"), md.get("title", {}).get("content", ""), next(walk(lk, "browseId"), None),
-            ctitle, when, vws)
+            ctitle, when, vws, next((t for t in walk(lk, "text") if isinstance(t, str) and LEN_RE.fullmatch(t)), ""))
     for i, v in enumerate(out):                      # keep page order for equal "2d ago" dates
         if v["published"]:
             v["published"] -= i
@@ -210,13 +227,14 @@ def parse_items(d):
 
 def store_videos(c, vids, exact=False):
     """Upsert videos. Approximate dates ("2d ago") never overwrite a date we already have."""
-    rows = [dict({"channel_id": None, "channel_title": "", "title": "", "published": 0, "views": 0, "short": 0},
+    rows = [dict({"channel_id": None, "channel_title": "", "title": "", "published": 0, "views": 0, "short": 0, "length": 0},
                  **v, exact=int(exact)) for v in vids if VID_RE.match(v.get("id", ""))]
     c.execute("BEGIN")
     try:
         c.executemany(
-            "INSERT INTO videos(id,channel_id,channel_title,title,published,views,short) "
-            "VALUES(:id,:channel_id,:channel_title,:title,:published,:views,:short) ON CONFLICT(id) DO UPDATE SET "
+            "INSERT INTO videos(id,channel_id,channel_title,title,published,views,short,length) "
+            "VALUES(:id,:channel_id,:channel_title,:title,:published,:views,:short,:length) ON CONFLICT(id) DO UPDATE SET "
+            "length=CASE WHEN excluded.length>0 THEN excluded.length ELSE videos.length END, "
             "channel_id=COALESCE(excluded.channel_id, videos.channel_id), "
             "channel_title=COALESCE(NULLIF(excluded.channel_title,''), videos.channel_title), "
             "title=COALESCE(NULLIF(excluded.title,''), videos.title), "
@@ -402,6 +420,8 @@ def fetch_related(c, vid, max_age=86400):
             c.execute("UPDATE videos SET channel_id=COALESCE(channel_id,?), views=MAX(views,?), "
                       "published=CASE WHEN published=0 THEN ? ELSE published END WHERE id=?",
                       (got("channelId"), int(got("viewCount") or 0), _ts(got("publishDate")), vid))
+        if got("lengthSeconds").isdigit():
+            c.execute("UPDATE videos SET length=? WHERE id=?", (int(got("lengthSeconds")), vid))
         rel = [v for v in parse_items(d) if v["id"] != vid][:20]
         store_videos(c, rel)
         c.execute("DELETE FROM related WHERE src=?", (vid,))
@@ -985,7 +1005,9 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .th{position:relative;display:block}
 .lt,.no{position:absolute;top:6px;width:30px;height:30px;border-radius:50%;background:rgba(0,0,0,.7);color:#fff;
   display:grid;place-items:center;font-size:15px;line-height:1;opacity:0;transition:opacity .12s}
-.lt{right:6px}.no{left:6px}.card:hover .lt,.card:hover .no,.lt.on{opacity:1}
+.lt{right:6px}.no{left:6px}
+.dur{position:absolute;right:6px;bottom:6px;padding:1px 5px;border-radius:4px;background:rgba(0,0,0,.8);color:#fff;
+  font-size:12px;font-weight:600;line-height:1.45;pointer-events:none}.card:hover .lt,.card:hover .no,.lt.on{opacity:1}
 @media (hover:none){.lt,.no{opacity:.9}}
 .gone{display:grid;place-items:center;align-content:center;gap:8px;aspect-ratio:16/9;border-radius:10px;background:var(--card);
   box-shadow:0 0 0 1px var(--line);color:var(--muted);font-size:13px;text-align:center}
@@ -1057,11 +1079,18 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
 .trow{margin:0 0 2px;scroll-margin-top:6px}.trow h2{font-size:15px;margin:0 0 0 8px;font-weight:600;color:#ddd}
 /* each row has room around it, so the selected card's border and zoom aren't cut off */
-.strip{position:relative;display:flex;gap:16px;overflow-x:auto;scrollbar-width:none;padding:18px 22px 14px;margin:0 -14px}
+.strip{position:relative;display:flex;gap:18px;overflow-x:auto;scrollbar-width:none;padding:26px 30px 30px;margin:0 -22px}
 .strip::-webkit-scrollbar{display:none}
-/* the pictures are the star: about 3½ videos across, Shorts tall like the video itself (YouTube's TV app uses 9:16) */
-.strip .card{flex:0 0 calc((100vw - 150px) / 3.4)}.strip .scard{flex:0 0 calc((100vw - 150px) / 6.4)}
+/* YouTube's TV app on a 1080p screen: video tiles 426 x 240, the top (featured) row 640 x 360; Shorts tall (9:16).
+   Sizes follow the screen width, so a 4K TV gets the same layout, twice as sharp. */
+.strip .card{flex:0 0 calc(100vw * 426 / 1920)}.trow:first-of-type .strip .card{flex-basis:calc(100vw * 640 / 1920)}
+.strip .scard{flex:0 0 calc(100vw * 240 / 1920)}
 .strip>a{min-width:0}   /* every card exactly that wide, however long its text */
+/* selected: 10% bigger, white outline, drop shadow, drawn over its neighbours */
+.strip>a{position:relative;transition:transform .12s,box-shadow .12s}
+.strip>a:focus{transform:scale(1.1)!important;z-index:2;outline:3px solid #fff!important;outline-offset:4px;border-radius:12px;
+  box-shadow:0 14px 34px rgba(0,0,0,.65)}
+.strip .dur{font-size:11px;padding:0 5px}
 .strip .scard img{aspect-ratio:9/16;border-radius:10px}
 /* the details sit under each picture, always the same height, so nothing moves when the selection changes */
 .strip .card h3,.strip .scard h3{-webkit-line-clamp:2;height:2.6em;line-height:1.3;font-size:13px;font-weight:500;margin:8px 0 2px;color:#ddd}
@@ -1374,6 +1403,12 @@ def views(n):
     return f"{n} views"
 
 
+def clock(n):
+    """3753 -> '1:02:33', 245 -> '4:05'."""
+    n = int(n or 0)
+    return (f"{n // 3600}:{n // 60 % 60:02d}:{n % 60:02d}" if n >= 3600 else f"{n // 60}:{n % 60:02d}") if n > 0 else ""
+
+
 def thumb(vid):
     return f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
 
@@ -1389,6 +1424,8 @@ def card(v, seen=False, saved=False, hide=False, src=None, why=None):
     extra = "" if short else (f'<span class="lt{" on" if saved else ""}" data-lt="{v["id"]}" title="Watch later">{"✓" if saved else "＋"}</span>'
                               + (f'<span class="no" data-no="{v["id"]}" title="Not interested">✕</span>' if hide else ""))
     tag = f' data-v="{v["id"]}" data-s="{src}"' if src else ""     # Home: reports when it's been on screen
+    length = "" if short or "length" not in v.keys() else clock(v["length"])
+    extra = (f'<span class="dur">{length}</span>' if length else "") + extra   # how long, bottom right
     return (f'<a class="card{" seen" if seen else ""}" href="{href}"{tag}>'
             f'<span class="th"><img loading="lazy" src="{thumb(v["id"])}" alt="">{extra}</span><h3>{e(v["title"] or v["id"])}</h3>'
             f'<div class="meta">{ch}</div><div class="meta">{meta}</div>'
@@ -1862,6 +1899,8 @@ class App(BaseHTTPRequestHandler):
             done = d > 0 and t >= d - max(10, d // 20)
             self.db.execute("UPDATE history SET pos=?, best=MAX(COALESCE(best,0),?), dur=CASE WHEN ?>0 THEN ? ELSE dur END "
                             "WHERE profile_id=? AND video_id=?", (0 if done or t < 5 else t, t, d, d, pid, vid))
+            if d > 0:
+                self.db.execute("UPDATE videos SET length=? WHERE id=? AND COALESCE(length,0)=0", (d, vid))
             if done:
                 self.db.execute("DELETE FROM later WHERE profile_id=? AND video_id=?", (pid, vid))
         self.send("", 204)

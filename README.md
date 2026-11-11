@@ -57,8 +57,11 @@ one and keeps the address and profile.
   them, OK presses one, Left goes back), Left goes to ✕ (OK closes).
 - Home is rows you scroll sideways: *Recommended for you*, *New from your subscriptions*, *New to you*, *Shorts* (tall
   cards like YouTube's TV app; pick one to start there), then a row for each reason (*Because you watched …*,
-  *From your search …*). The pictures are large, about 3½ videos across. Each video's title, channel and views sit
+  *From your search …*). Sizes follow YouTube's TV app (on a 1080p screen): video tiles 426 × 240, the top row
+  640 × 360, Shorts tall; the selected one grows 10% with a white outline. Each video's title, channel and views sit
   under its picture (the reason it was picked shows when it's selected).
+- Every video picture (TV, phone and computer) shows its length bottom right, once YakTube knows it: YouTube's lists
+  include it, and the player reports it for anything you play.
 - Remote: Left / Right along a row, Up / Down between rows (each row remembers where you were), Left at the start of a
   row opens the rail, Right leaves it. The rail is hidden while a video plays.
 - The video player shows the title on top and, along the bottom, a progress bar (select it, then Left / Right jump

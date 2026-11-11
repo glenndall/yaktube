@@ -316,6 +316,27 @@ class T(unittest.TestCase):
         self.assertNotIn(".tvside{display:flex", self.get(b, "/feed?tv=0")[2])
         db.close()
 
+    def test_20_lengths(self):
+        self.assertEqual([app.secs(x) for x in ("4:05", "1:02:33", "12:00", "LIVE", "", "3 views")], [245, 3753, 720, 0, 0, 0])
+        self.assertEqual([app.clock(x) for x in (245, 3753, 0, None)], ["4:05", "1:02:33", "", ""])
+        lk = lockup("len00000001", "Has a length")
+        lk["lockupViewModel"]["contentImage"] = {"thumbnailViewModel": {"overlays": [{"thumbnailBottomOverlayViewModel": {
+            "badges": [{"thumbnailBadgeViewModel": {"text": "12:34"}}]}}]}}
+        sr = {"videoRenderer": {"videoId": "len00000002", "title": {"runs": [{"text": "Searched"}]}, "lengthText": {"simpleText": "1:02:33"}}}
+        got = {v["id"]: v["length"] for v in app.parse_items({"a": [lk, sr]})}
+        self.assertEqual(got, {"len00000001": 754, "len00000002": 3753})   # from up-next / channel lists and search
+        c = app.connect()
+        app.store_videos(c, [{"id": "len00000001", "title": "x", "length": 754}])
+        app.store_videos(c, [{"id": "len00000001", "title": "x"}])        # a list without the length keeps it
+        self.assertEqual(c.execute("SELECT length FROM videos WHERE id='len00000001'").fetchone()[0], 754)
+        row = c.execute("SELECT * FROM videos WHERE id='len00000001'").fetchone()
+        self.assertIn('<span class="dur">12:34</span>', app.card(row))   # bottom right of the picture
+        a = self.login("Lengths")
+        a.open(self.base + "/seen", b"v=len00000002&n=1&t=5&d=0")
+        a.open(self.base + "/seen", b"v=len00000003&n=1&t=30&d=615")      # the player says how long it is
+        self.assertEqual(c.execute("SELECT length FROM videos WHERE id='len00000003'").fetchone()[0], 615)
+        c.close()
+
     def test_2_bad_input(self):
         a = self.login("Tester")
         _, _, page = self.get(a, "/subs/add", {"url": "<script>x</script>"})
