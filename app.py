@@ -345,7 +345,8 @@ def shorts_for(c, pid, first=None, limit=300):
     for name, val in c.execute("SELECT v.channel_title, r.val FROM ratings r JOIN videos v ON v.id=r.video_id "
                                "WHERE r.profile_id=? AND v.channel_title!=''", (pid,)):
         score[name] = score.get(name, 0) + (1 if val > 0 else -1.5)
-    out = [found[v] for v in ids if v in found and score.get(found[v]["channel_title"], 0) >= 0]
+    no_vids = hidden_sets(c, pid)[0]
+    out = [found[v] for v in ids if v in found and v not in no_vids and score.get(found[v]["channel_title"], 0) >= 0]
     lift = lambda r: 30 * min(score.get(r["channel_title"], 0), 3)     # up to 90 places for a favourite
     out = [r for _, r in sorted(enumerate(out), key=lambda p: p[0] - lift(p[1]))]
     if first:
@@ -1126,6 +1127,16 @@ border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.7
 .tvbar button:focus,.tvnx button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
 .tvnx{position:absolute;right:28px;bottom:84px;max-width:440px;padding:16px 18px;border-radius:14px;background:rgba(20,20,20,.94);box-shadow:0 0 0 1px var(--line)}
 .tvnx>b{display:block;margin:4px 0 12px;font-size:16px;line-height:1.3}.tvnx button{margin-right:8px;font-size:14px;padding:5px 14px}
+/* hold OK on a video: a menu of things to do with it, over a dimmed screen */
+.tvlm{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:rgba(0,0,0,.6)}
+.tvlm>div{display:flex;flex-direction:column;gap:4px;width:420px;padding:14px;border-radius:18px;background:#1c1c1e;
+  box-shadow:0 0 0 1px var(--line),0 16px 50px rgba(0,0,0,.7)}
+.tvlm b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;padding:4px 18px 10px;font-size:15px;
+  line-height:1.3;font-weight:600;color:#aaa}
+.tvlm button{text-align:left;font:inherit;font-size:18px;padding:11px 18px;border-radius:12px;border:0;background:none;color:var(--fg)}
+.tvlm button:focus{background:var(--fg);color:var(--bg);outline:none!important}
+.tvtoast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);z-index:51;padding:10px 22px;border-radius:999px;
+  background:#1c1c1e;color:#fff;font-size:16px;box-shadow:0 0 0 1px var(--line),0 8px 24px rgba(0,0,0,.6)}
 </style>"""
 # Both players call the function yakTrack() returns on every update from YouTube. A video goes into History once it
 # has really played for 10 seconds (not when its page opens); after that the position is saved every 15 seconds,
@@ -1514,6 +1525,40 @@ if(d=="ArrowRight"){if(l[i+1])put(l[i+1])}else if(d=="ArrowLeft"){if(i>0)put(l[i
 else{var R=rows(),n=R[R.indexOf(r)+(d=="ArrowDown"?1:-1)];if(n){var m=items(n);put(m[Math.min(+n.dataset.i||0,m.length-1)])}}}},true);
 var f=document.querySelector(".trow .strip>a");if(f&&(!document.activeElement||document.activeElement==document.body))put(f)})()</script>"""
 
+# On the TV, holding OK on a video (for half a second) opens a menu: Not interested, Watch later and its channel.
+# A short press still opens the video: OK on a video waits for the button to come back up before acting.
+TV_MENU_JS = """<script>(function(){var held=null,tm=0,menu=null,from=null,tt=0;
+function card(a){return a&&a.closest?a.closest("a.card,a.scard"):null}
+function vid(a){var m=/[?&]v=([A-Za-z0-9_-]{11})/.exec(a.getAttribute("href")||"");return m?m[1]:null}
+function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b}).then(function(r){return r.text()})}
+function stop(k){k.preventDefault();k.stopImmediatePropagation()}
+function toast(t){var o=document.querySelector(".tvtoast");if(!o){o=document.createElement("div");o.className="tvtoast";document.body.appendChild(o)}
+  o.textContent=t;o.hidden=false;clearTimeout(tt);tt=setTimeout(function(){o.hidden=true},2200)}
+function shut(){if(!menu)return;menu.remove();menu=null;if(from&&document.contains(from))from.focus({preventScroll:true})}
+function show(a){var v=vid(a);if(!v)return;from=a;
+  fetch("/vstate?v="+v).then(function(r){return r.json()}).then(function(s){if(menu||document.activeElement!=a)return;
+    var ch=a.querySelector("[data-ch]"),l=[["no","Not interested"],["lt",s.later?"Remove from Watch later":"Watch later"]];
+    if(ch&&ch.dataset.ch)l.push(["ch","Go to channel"]);
+    menu=document.createElement("div");menu.className="tvlm";menu.innerHTML="<div><b></b>"+l.map(function(x){
+      return '<button type="button" data-a="'+x[0]+'">'+x[1]+"</button>"}).join("")+"</div>";
+    menu.querySelector("b").textContent=(a.querySelector("h3")||{}).textContent||"";
+    menu.addEventListener("click",function(e){var b=e.target.closest("button");if(b)act(b.dataset.a,a,v,ch)});
+    document.body.appendChild(menu);menu.querySelector("button").focus({preventScroll:true})})}
+function act(w,a,v,ch){shut();
+  if(w=="lt")post("/later/toggle","v="+v).then(function(s){toast(s=="1"?"Saved to Watch later":"Removed from Watch later")});
+  else if(w=="no"){post("/hide","v="+v+"&js=1");var n=a.nextElementSibling||a.previousElementSibling;a.remove();
+    if(n)n.focus({preventScroll:true});toast("Hidden from your suggestions")}
+  else if(w=="ch")location.href="/channel?id="+ch.dataset.ch}
+addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,c;
+  if(menu){if(k.repeat){stop(k);return}
+    if(d=="ArrowUp"||d=="ArrowDown"){stop(k);var b=[].slice.call(menu.querySelectorAll("button")),i=b.indexOf(a);
+      var n=b[i<0?0:i+(d=="ArrowDown"?1:-1)];if(n)n.focus()}
+    else if(d=="ArrowLeft"||d=="ArrowRight")stop(k);else if(d=="Escape"||d=="Backspace"){stop(k);shut()}return}
+  if(d=="Enter"&&(c=card(a))){stop(k);if(!k.repeat){clearTimeout(tm);held=c;tm=setTimeout(function(){tm=0;show(c)},500)}}},true);
+addEventListener("keyup",function(k){if(k.key!="Enter"||!held)return;stop(k);var c=held;held=null;
+  if(tm){clearTimeout(tm);tm=0;c.click()}},true);
+var ob=window.yakBack;window.yakBack=function(){if(menu){shut();return true}return ob?ob():false}})()</script>"""
+
 # Navigation icons (24x24, filled with the text colour).
 ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
     "home": '<path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/>',
@@ -1590,7 +1635,7 @@ class App(BaseHTTPRequestHandler):
         if isinstance(body, str) and ctype.startswith("text/html") and self.tv():
             body = body.replace("</head>", TV_CSS + "</head>", 1)
             if "<!--tvrecent-->" in body:                       # the rail: channels you watched lately, and its script
-                body = body.replace("<!--tvrecent-->", self.tv_recent(), 1).replace("</body>", TV_JS + "</body>", 1)
+                body = body.replace("<!--tvrecent-->", self.tv_recent(), 1).replace("</body>", TV_JS + TV_MENU_JS + "</body>", 1)
         data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -1674,7 +1719,7 @@ class App(BaseHTTPRequestHandler):
             h = {("GET", "/"): self.home, ("GET", "/feed"): self.feed, ("POST", "/rate"): self.rate, ("POST", "/impr"): self.impr, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
                  ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add, ("GET", "/channel"): self.channel,
                  ("POST", "/subs/import"): self.sub_import, ("GET", "/subs/export"): self.sub_export,
-                 ("GET", "/later"): self.later, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
+                 ("GET", "/later"): self.later, ("GET", "/vstate"): self.vstate, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
@@ -1931,7 +1976,18 @@ class App(BaseHTTPRequestHandler):
                 else:
                     self.db.execute("INSERT OR IGNORE INTO hidden(profile_id,kind,ref,added_at) VALUES(?,?,?,?)",
                                     (pid, kind, ref, int(time.time())))
+        if f.get("js"):
+            return self.send("", 204)                        # the TV's hold-OK menu needs no page back
         self.back(f)
+
+    def vstate(self):
+        """A video's thumb and Watch later state, for the TV's hold-OK menu."""
+        vid, pid = self.q.get("v", ""), self.prof["id"]
+        if not VID_RE.fullmatch(vid):
+            return self.send("", 400)
+        r = self.db.execute("SELECT val FROM ratings WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
+        later = self.db.execute("SELECT 1 FROM later WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
+        self.send(json.dumps({"r": r[0] if r else 0, "later": bool(later)}), ctype="application/json")
 
     def feed_shorts(self):
         self.db.execute("UPDATE profiles SET feed_shorts=1-COALESCE(feed_shorts,1) WHERE id=?", (self.prof["id"],))

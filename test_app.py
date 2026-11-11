@@ -1,5 +1,5 @@
 """Phase 1 tests: run with `python3 test_app.py`. YouTube is mocked; no network needed."""
-import os, re, sys, tempfile, threading, time, unittest, urllib.request, urllib.parse, http.cookiejar
+import json, os, re, sys, tempfile, threading, time, unittest, urllib.request, urllib.parse, http.cookiejar
 os.environ["YAK_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app
@@ -295,6 +295,20 @@ class T(unittest.TestCase):
         self.assertIn("Recent channels", rail)                          # channels you watched lately
         self.assertIn(f'href="/channel?id={CID2}"', rail)
         self.assertIn('stopImmediatePropagation', page)                 # the remote: rows and rail
+        self.assertIn('menu.className="tvlm"', page)                     # hold OK on a video: a menu
+        self.assertIn('fetch("/vstate?v="', page)
+        self.assertNotIn("TV_MENU", web)
+        self.assertNotIn('"tvlm"', web)                                  # (only on the TV)
+        post = lambda path, body: a.open(self.base + path, body.encode())
+        state = lambda: json.loads(self.get(a, "/vstate?v=tvr00000001")[2])
+        self.assertEqual(state(), {"r": 0, "later": False})
+        post("/rate", "v=tvr00000001&r=-1")
+        post("/later/toggle", "v=tvr00000001")
+        self.assertEqual(state(), {"r": -1, "later": True})              # the menu marks what's set
+        self.assertEqual(post("/hide", "v=tvr00000002&js=1").status, 204)   # Not interested from the menu: no page back
+        self.assertNotIn('href="/watch?v=tvr00000002"', self.get(a, "/")[2])
+        with self.assertRaises(urllib.error.HTTPError):
+            self.get(a, "/vstate?v=bad")
         self.get(a, "/subs/add", {"url": "@woz"})
         page = self.get(a, "/")[2]
         h2 = re.findall(r"<h2>([^<]*)</h2>", page)
