@@ -1055,16 +1055,19 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 .bare .tvside{display:none}#sr{display:none}   /* Shorts: no Share button on the TV */.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
-#tvinfo{position:sticky;top:0;z-index:5;min-height:96px;padding:2px 6px 16px;background:linear-gradient(#111 80%,rgba(17,17,17,0))}
-#tvinfo b{display:block;font-size:21px;line-height:1.25;max-width:70%;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
-#tvinfo span{display:block;margin-top:4px;font-size:13px;color:#bbb}#tvinfo i{display:block;margin-top:2px;font-style:normal;font-size:12px;color:var(--accent)}
-.trow{margin:0 0 10px;scroll-margin-top:108px}.trow h2{font-size:15px;margin:0 0 2px 8px;font-weight:600;color:#ddd}
-.strip{position:relative;display:flex;gap:16px;overflow-x:auto;scrollbar-width:none;padding:12px 8px 12px}.strip::-webkit-scrollbar{display:none}
+.trow{margin:0 0 2px;scroll-margin-top:6px}.trow h2{font-size:15px;margin:0 0 0 8px;font-weight:600;color:#ddd}
+/* each row has room around it, so the selected card's border and zoom aren't cut off */
+.strip{position:relative;display:flex;gap:16px;overflow-x:auto;scrollbar-width:none;padding:18px 22px 14px;margin:0 -14px}
+.strip::-webkit-scrollbar{display:none}
 /* the pictures are the star: about 3½ videos across, Shorts tall like the video itself (YouTube's TV app uses 9:16) */
 .strip .card{flex:0 0 calc((100vw - 150px) / 3.4)}.strip .scard{flex:0 0 calc((100vw - 150px) / 6.4)}
+.strip>a{min-width:0}   /* every card exactly that wide, however long its text */
 .strip .scard img{aspect-ratio:9/16;border-radius:10px}
-.strip .card h3,.strip .scard h3{-webkit-line-clamp:1;font-size:12.5px;font-weight:500;margin-top:6px;color:#ccc}
-.strip .card .meta,.strip .why{display:none}.strip .scard .meta{display:none}
+/* the details sit under each picture, always the same height, so nothing moves when the selection changes */
+.strip .card h3,.strip .scard h3{-webkit-line-clamp:2;height:2.6em;line-height:1.3;font-size:13px;font-weight:500;margin:8px 0 2px;color:#ddd}
+.strip .card .meta,.strip .scard .meta,.strip .why{display:block;font-size:11.5px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#999}
+.strip .why{visibility:hidden;color:var(--accent)}.strip .card:focus .why{visibility:visible}
+.strip .card:focus h3,.strip .scard:focus h3{color:var(--accent)}
 .scard{transition:transform .1s}.scard:focus{transform:scale(1.06)}.scard:focus h3{color:var(--accent)}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
@@ -1463,19 +1466,16 @@ addEventListener("pageshow",function(e){if(e.persisted)location.reload()})})()</
 # to the row above or below (each row remembers where you were), Left at the start of a row opens the rail.
 # In the rail, Up / Down move and Right goes back to where you were. Anything else is left to the TV app's own
 # arrow-key handling (it jumps to the nearest thing in that direction).
-TV_JS = """<script>(function(){var rail=document.querySelector(".tvside"),last=null,inf=document.getElementById("tvinfo");
+TV_JS = """<script>(function(){var rail=document.querySelector(".tvside"),last=null;
 if(!rail)return;
 function rows(){return[].slice.call(document.querySelectorAll(".trow"))}
 function items(r){return[].slice.call(r.querySelectorAll(".strip>a"))}
-function info(a){if(!inf)return;var q=function(s){var x=a.querySelector(s);return x?x.textContent:""},m=a.querySelectorAll(".meta");
-inf.innerHTML="<b></b><span></span><i></i>";inf.children[0].textContent=q("h3");
-inf.children[1].textContent=[].map.call(m,function(x){return x.textContent}).filter(String).join(" \u00b7 ");inf.children[2].textContent=q(".why")}
 function put(a){var r=a.closest(".trow"),s=a.parentNode;r.dataset.i=items(r).indexOf(a);s.scrollLeft=Math.max(0,a.offsetLeft-a.offsetWidth*.6);
-a.focus({preventScroll:true});if(rows()[0]==r)scrollTo(0,0);else r.scrollIntoView({block:"start"});info(a)}
+a.focus({preventScroll:true});if(rows()[0]==r)scrollTo(0,0);else r.scrollIntoView({block:"start"})}
 function open(){(rail.querySelector("a.on")||rail.querySelector("a")).focus()}
 function stop(k){k.preventDefault();k.stopImmediatePropagation()}
 addEventListener("focusin",function(e){var t=e.target;if(rail.contains(t)){if(!rail.contains(e.relatedTarget)){var on=rail.querySelector("a.on");if(on&&on!=t)on.focus()}}
-else if(t!=document.body){last=t;if(t.closest&&t.closest(".trow"))info(t)}});
+else if(t!=document.body)last=t});
 addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,r;if(!/^Arrow/.test(d))return;
 if(rail.contains(a)){stop(k);if(d=="ArrowRight"){if(last&&document.contains(last)){if(last.closest(".trow"))put(last);else last.focus()}else{var f=document.querySelector(".trow .strip>a");f?put(f):rail.blur()}}
 else if(d!="ArrowLeft"){var l=[].slice.call(rail.querySelectorAll("a")),n=l[l.indexOf(a)+(d=="ArrowDown"?1:-1)];if(n){n.focus();n.scrollIntoView({block:"nearest"})}}return}
@@ -1779,7 +1779,7 @@ class App(BaseHTTPRequestHandler):
                  ("New to you", [(r, "explore", 0, WHY["explore"]) for r in ntu]), ("Shorts", home_shorts(self.db, pid, 20))]
                 + [(k, v) for k, v in groups.items() if len(v) >= 3]
                 + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
-        return '<h1 class="sr">Home</h1><div id="tvinfo"></div>' + "".join(
+        return '<h1 class="sr">Home</h1>' + "".join(
             f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
             + "".join(short_card(p) if title == "Shorts" else self.card(p[0], hide=True, src=p[1], why=p[3]) for p in row)
             + '</div></section>' for title, row in rows if row) + HOME_JS

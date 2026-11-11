@@ -57,7 +57,8 @@ one and keeps the address and profile.
   them, OK presses one, Left goes back), Left goes to ✕ (OK closes).
 - Home is rows you scroll sideways: *Recommended for you*, *New from your subscriptions*, *New to you*, *Shorts* (tall
   cards like YouTube's TV app; pick one to start there), then a row for each reason (*Because you watched …*,
-  *From your search …*). The pictures are large, about 3½ videos across. The selected video's title, channel and reason show above them.
+  *From your search …*). The pictures are large, about 3½ videos across. Each video's title, channel and views sit
+  under its picture (the reason it was picked shows when it's selected).
 - Remote: Left / Right along a row, Up / Down between rows (each row remembers where you were), Left at the start of a
   row opens the rail, Right leaves it. The rail is hidden while a video plays.
 - The video player shows the title on top and, along the bottom, a progress bar (select it, then Left / Right jump

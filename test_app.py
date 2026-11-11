@@ -276,7 +276,9 @@ class T(unittest.TestCase):
         self.assertNotIn("TV pages: the remote", web)
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         page = self.get(a, "/")[2]
-        self.assertIn('<div id="tvinfo">', page)                       # the focused video's details
+        self.assertNotIn('tvinfo', page)                                # details sit under each picture...
+        self.assertIn(".strip>a{min-width:0}", page)                     # (cards never stretch to fit long text)
+        self.assertIn(".strip .card h3,.strip .scard h3{-webkit-line-clamp:2;height:2.6em", page)   # ...always the same height
         self.assertIn('<h2>Recommended for you</h2>', page)            # rows like the Google TV app
         self.assertIn('<h2>Because you watched Watched on TV</h2>', page)
         self.assertIn('<h2>New to you</h2>', page)                     # its own row, not in the rail
