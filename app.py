@@ -1050,8 +1050,10 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
   main{padding:16px 16px calc(80px + env(safe-area-inset-bottom))}
   .bot{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:6;padding-bottom:env(safe-area-inset-bottom);
     background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--line)}
-  .bot a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0 7px;font-size:11px;color:var(--muted)}
-  .bot a.on{color:var(--fg);font-weight:600}.bot a.on svg{color:var(--accent)}
+  .bot a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:6px 0 5px;font-size:11px;font-weight:700;color:var(--fg)}
+  .bot a svg{width:34px;height:34px;padding:7px;border-radius:50%;box-shadow:0 0 0 2px currentColor;   /* bold icon in a ring */
+    stroke:currentColor;stroke-width:.9;stroke-linejoin:round;overflow:visible}
+  .bot a.on{font-weight:800}.bot a.on svg{color:var(--accent);background:color-mix(in srgb,var(--accent) 14%,transparent)}
   .grid{grid-template-columns:1fr 1fr;gap:16px 10px}.row img{width:130px}
   .sgrid{grid-template-columns:1fr 1fr;gap:12px 10px}}
 @media(max-width:440px){.grid{grid-template-columns:1fr}}
