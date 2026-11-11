@@ -1,6 +1,6 @@
 # YakTube
 
-A tiny self-hosted YouTube portal: profiles, subscriptions, search, "For you" suggestions, watch later, watch history.
+A tiny self-hosted YouTube portal: profiles, subscriptions, search, Home suggestions, watch later, watch history.
 No Google account, no API key, no dependencies: one Python file plus one SQLite database.
 
 ## Run it
@@ -19,6 +19,7 @@ YakTube reads a few environment variables (there's no `.env` file). Leave them o
 | Variable | Default | What it does |
 |---|---|---|
 | `YAK_REFRESH_MIN` | `30` | Minutes between checks for new videos from your subscriptions |
+| `YAK_DISCOVER_HOURS` | `6` | Hours between look-arounds for new Home / New to you suggestions (`0` = off) |
 | `YAK_DB` | `./yaktube.db` | Where the database lives (Docker: `/data/yaktube.db`, already set) |
 | `YAK_PORT` | `8080` | Port to listen on (not for Docker, see below) |
 | `YAK_HOST` | `0.0.0.0` | Address to listen on; `127.0.0.1` keeps it to this computer only |
@@ -64,8 +65,17 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 - **Picks up where you left off:** a video you stopped part-way resumes from there, for each profile.
 - **Channel pages:** click a channel's name (under any video, on a watch page, or in Subscriptions) to see its
   newest ~30 videos and subscribe or unsubscribe there. On the TV, open a video and pick the channel name below it.
-- **Feed:** newest uploads from your subscriptions. The **Shorts** switch (next to Refresh) hides or shows their Shorts.
-- **For you:** suggestions worked out on this computer from your own history (see below).
+- **Layout:** like YouTube's. On a computer, Home, Shorts and Subscriptions sit in a bar down the left, with New to you,
+  Later, Channels and History under them (it shrinks to icons on a narrow window). On a phone, Home, Shorts and
+  Subscriptions sit along the bottom, and New to you, Later, Channels, History and Profiles across the top.
+- **Home:** suggestions worked out on this computer from what you watch, like, search for and subscribe to (see
+  *How Home picks videos* below), with a group of 4 Shorts every few rows (unwatched ones from your subscriptions taking
+  turns with YouTube's). It changes as you use it: after every video you watch, Back to Home shows picks that follow it.
+  Add `?why=1` to the address (`/?why=1`) to see why each video is there and its score.
+- **Subscriptions:** newest uploads from your subscriptions (`/feed`). The **Shorts** switch (next to Refresh) hides or
+  shows their Shorts. **Channels** is where you add, remove, import and export subscriptions.
+- **Thumbs up / down:** under a video and beside a Short. A thumbs up brings in more like it (and that channel); a
+  thumbs down drops the video's "up next" from your suggestions and sinks its channel. Thumbed-down Shorts leave Home.
 - **New to you:** channels you've never watched or subscribed to, found through the ones you like. One video per channel.
 - **Shorts:** full screen, one at a time, from all over YouTube (not your subscriptions), skipping ones you've
   watched. Swipe up for the next one, down to go back, tap to pause; each one replays until you move on. On a computer use the mouse wheel,
@@ -76,7 +86,7 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
 - **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, the
   **Quality** button switches Auto → 720p → 480p (remembered on that TV); the time display shows what's playing.
 - **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
-- **Not interested:** ✕ on a video in For you / New to you hides it, and offers to hide the whole channel
+- **Not interested:** ✕ on a video on Home / New to you hides it, and offers to hide the whole channel
   (or use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
   where you can unhide them. Your feed and search are not affected.
 - **Autoplay on the TV:** off by default. Switch on **Autoplay** in the TV player's buttons (remembered on that TV)
@@ -89,11 +99,32 @@ The TV layout (bigger, dark, highlight on the selected item) lives in `app.py` (
   YakTube reads the channel's normal videos page instead. Checked every 30 minutes.
 - **Search and "Up next":** read from YouTube's public pages (the same data a logged-out browser sees).
 - **Playback:** YouTube's privacy-mode embedded player (youtube-nocookie.com). Nothing to download or extract.
-- **For you:** ranks the "up next" videos of your last 25 watches (recent ones count more) plus fresh unwatched
-  uploads from your subscriptions, boosted for channels you watch often. At most 3 per channel; never anything you've seen.
+- **How Home picks videos:** all worked out on this computer; YouTube only supplies lists of videos, the same
+  ones a visitor who isn't logged in sees. Never anything you've watched or rated.
+  - *Where picks come from:* the "up next" lists of your recent watches (the last few hours count most, so Home follows
+    your mood) and of videos you thumbed up; new uploads and older unwatched videos from your subscriptions; results of
+    searches you've made (recent and repeated ones count more); searches YakTube makes by itself from the words in
+    titles you watch and like; and New to you.
+  - *How each is scored:* how strongly those lists point at it (a video several lists agree on counts more) × how much
+    you like its channel (from how much of its videos you watch, how often, how lately, and your thumbs) × how well its
+    title matches your topics × how new it is to you. Each time a video was on your screen and you passed it over, it
+    sinks; it recovers over a few days. Home's page tells YakTube which videos were really on screen.
+  - *Learning:* for each of those sources YakTube tracks how many of the videos it showed you went on to watch (a thumbs
+    up counts double, a thumbs down as a miss). Sources that work for you get more of Home; a little randomness keeps
+    trying the others.
+  - *Variety:* at most 2 per channel in the first 24 and 3 overall (more only if nothing else is left), one list or
+    search can't fill the page, and every 6th place goes to something new. Home reshuffles after every video you watch
+    and every 15 minutes.
+  - *Keeping it fresh:* the moment a video counts as watched, YakTube fetches its "up next" (and looks one step past it).
+    On the 6-hourly look-around it also re-reads thumbed-up videos' lists, re-runs your recent searches and its own
+    topic searches, and reads your two favourite subscriptions' channel pages in depth (each at most weekly).
+- **New to you:** the "up next" videos of your watches, and of those suggestions, from channels you haven't tried.
+  Every 6 hours YakTube re-reads the "up next" lists of your last 25 watches and looks one step further out from
+  the current picks (up to 18 YouTube pages per profile). A channel you've been shown and passed over sinks
+  (half as strong every 3 days) so others take its place; after a month it gets another chance.
 - **Shorts:** once an hour YakTube opens youtube.com/shorts like a visitor who isn't logged in and keeps the ~40
   Shorts YouTube offers (ones that can't play outside YouTube are skipped), up to the newest 200. It uses YouTube's
-  own internal request, so YouTube could break it. Watching Shorts doesn't change your For you / New to you suggestions.
+  own internal request, so YouTube could break it. Watching Shorts doesn't change your Home / New to you suggestions.
 - **Tidy-up:** once a day YakTube forgets old "Up next" lists and videos nobody needs (unwatched, not from
   your subscriptions, older than 60 days; subscription videos after a year), so the database stays a few MB.
   Profiles, subscriptions and watch history are never touched.

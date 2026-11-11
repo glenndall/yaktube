@@ -5,7 +5,7 @@ One file, Python standard library only. Data lives in SQLite.
 Subscriptions come from YouTube's public RSS feeds; playback uses the
 privacy-enhanced embedded player. No Google account, no API key.
 """
-import base64, csv, functools, html, io, json, os, re, sqlite3, struct, threading, time, urllib.parse, urllib.request, zlib
+import base64, csv, functools, html, io, json, math, os, random, re, sqlite3, struct, threading, time, urllib.parse, urllib.request, zlib
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -17,6 +17,7 @@ DB_PATH = os.environ.get("YAK_DB", os.path.join(HERE, "yaktube.db"))
 HOST = os.environ.get("YAK_HOST", "0.0.0.0")
 PORT = int(os.environ.get("YAK_PORT", "8080"))
 REFRESH_MIN = int(os.environ.get("YAK_REFRESH_MIN", "30"))
+DISCOVER_HOURS = float(os.environ.get("YAK_DISCOVER_HOURS", "6"))   # how often to look for new suggestions; 0 = never
 UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/124.0 Safari/537.36")
 FEED = "https://www.youtube.com/feeds/videos.xml?channel_id="
@@ -51,6 +52,18 @@ CREATE TABLE IF NOT EXISTS hidden(
   kind TEXT NOT NULL, ref TEXT NOT NULL, added_at INTEGER, PRIMARY KEY(profile_id, kind, ref));
 CREATE TABLE IF NOT EXISTS related(src TEXT NOT NULL, video_id TEXT NOT NULL, pos INTEGER, PRIMARY KEY(src, video_id));
 CREATE TABLE IF NOT EXISTS related_src(src TEXT PRIMARY KEY, fetched_at INTEGER);
+CREATE TABLE IF NOT EXISTS shown(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  video_id TEXT NOT NULL, first_at INTEGER, PRIMARY KEY(profile_id, video_id));
+CREATE TABLE IF NOT EXISTS searches(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  q TEXT NOT NULL, at INTEGER, n INTEGER DEFAULT 1, auto INTEGER DEFAULT 0, PRIMARY KEY(profile_id, q));
+CREATE TABLE IF NOT EXISTS impressions(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  video_id TEXT NOT NULL, src TEXT, first_at INTEGER, last_at INTEGER, n INTEGER DEFAULT 1, PRIMARY KEY(profile_id, video_id));
+CREATE TABLE IF NOT EXISTS ratings(
+  profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
+  video_id TEXT NOT NULL, val INTEGER NOT NULL, at INTEGER, PRIMARY KEY(profile_id, video_id));
 """
 
 
@@ -70,6 +83,9 @@ def init_db():
         c.execute("ALTER TABLE profiles ADD COLUMN feed_shorts INTEGER DEFAULT 1")       # Feed shows subs' Shorts
     if "pos" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:            # added Nov 2026
         c.execute("ALTER TABLE history ADD COLUMN pos INTEGER DEFAULT 0")                # seconds in, to resume from
+    if "best" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:           # added Nov 2026: how much of it
+        c.execute("ALTER TABLE history ADD COLUMN best INTEGER DEFAULT 0")               # was watched (furthest point)
+        c.execute("ALTER TABLE history ADD COLUMN dur INTEGER DEFAULT 0")                # and how long it is
     c.close()
 
 
@@ -259,7 +275,7 @@ OUTSIDE_AT = [0]  # when we last asked
 
 def refresh_outside(max_age=3600, pages=5, keep=200):
     """Open youtube.com/shorts/ like a visitor with no account, then ask for the Shorts that follow
-    (8 per request, as YouTube's own page does). Saved as Shorts, so they never steer For you / New to you."""
+    (8 per request, as YouTube's own page does). Saved as Shorts, so they never steer Home / New to you."""
     if OUTSIDE_AT[0] > time.time() - max_age:
         return
     OUTSIDE_AT[0] = time.time()
@@ -310,6 +326,30 @@ def shorts_for(c, pid, first=None, limit=300):
     if first:
         out = [ensure_video(c, first)] + [r for r in out if r["id"] != first]
     return [{"id": r["id"], "title": r["title"] or "", "channel": r["channel_title"] or ""} for r in out[:limit]]
+
+
+def home_shorts(c, pid, n=16):
+    """Shorts for the shelves on Home: unwatched ones from your subscriptions (newest first) taking turns with
+    YouTube's own (the Shorts tab's list). Skips hidden and thumbed-down ones."""
+    skip = {r[0] for r in c.execute("SELECT video_id FROM history WHERE profile_id=? UNION "
+                                    "SELECT video_id FROM ratings WHERE profile_id=? AND val<0", (pid, pid))}
+    no_vids, no_chans = hidden_sets(c, pid)
+    skip |= no_vids
+    mine = c.execute("SELECT v.* FROM videos v JOIN subs s ON s.channel_id=v.channel_id AND s.profile_id=? "
+                     "WHERE v.short=1 ORDER BY v.published DESC LIMIT 60", (pid,)).fetchall()
+    ids = OUTSIDE[:]
+    found = {r["id"]: r for r in c.execute(
+        f"SELECT * FROM videos WHERE id IN ({','.join('?' * len(ids))})", ids)} if ids else {}
+    theirs = [found[v] for v in ids if v in found]
+    out, got = [], set()
+    for i in range(max(len(mine), len(theirs))):
+        for src in (mine, theirs):
+            if i < len(src):
+                r = src[i]
+                if r["id"] not in skip and r["id"] not in got and r["channel_id"] not in no_chans:
+                    got.add(r["id"])
+                    out.append(r)
+    return out[:n]
 
 
 def mark_watched(c, pid, vid):
@@ -413,51 +453,14 @@ def ensure_video(c, vid):
     return c.execute("SELECT * FROM videos WHERE id=?", (vid,)).fetchone()
 
 
-def for_you(c, pid, limit=48):
-    """Local recommendations from this profile's own history. Nothing leaves the machine."""
-    now, day = time.time(), 86400
-    hist = c.execute("SELECT h.video_id, h.watched_at, h.times, v.channel_id FROM history h LEFT JOIN videos v "
-                     "ON v.id=h.video_id WHERE h.profile_id=? AND COALESCE(v.short,0)=0 "   # Shorts don't steer suggestions
-                     "ORDER BY h.watched_at DESC LIMIT 300", (pid,)).fetchall()
-    watched = {r[0] for r in c.execute("SELECT video_id FROM history WHERE profile_id=?", (pid,))}
-    subs = {r[0] for r in c.execute("SELECT channel_id FROM subs WHERE profile_id=?", (pid,))}
-    no_vids, no_chans = hidden_sets(c, pid)   # "not interested"
-    watched |= no_vids
-    aff = {}                                  # how much you like each channel, fading with a 30-day half-life
-    for h in hist:
-        if h["channel_id"]:
-            aff[h["channel_id"]] = aff.get(h["channel_id"], 0) + h["times"] * 0.5 ** ((now - h["watched_at"]) / (30 * day))
-    top = max(aff.values(), default=1)
-    score = {}
-    for i, h in enumerate(hist[:25]):         # "up next" of recent watches, recent ones count more
-        for vid, pos in c.execute("SELECT video_id, pos FROM related WHERE src=?", (h["video_id"],)):
-            score[vid] = score.get(vid, 0) + 1 / (1 + 0.15 * i) / (1 + 0.1 * pos)
-    for vid, pub in c.execute("SELECT v.id, v.published FROM videos v JOIN subs s ON s.channel_id=v.channel_id "
-                              "AND s.profile_id=? WHERE v.short=0 AND v.published>?", (pid, now - 21 * day)):
-        score[vid] = score.get(vid, 0) + 0.8 * (1 - (now - pub) / (21 * day))   # fresh, unwatched uploads
-    ids = [v for v in sorted(score, key=score.get, reverse=True) if v not in watched][:500]
-    if not ids:
-        return []
-    rows = c.execute(f"SELECT * FROM videos WHERE short=0 AND id IN ({','.join('?' * len(ids))})", ids).fetchall()
-
-    def final(r):
-        ch = r["channel_id"]
-        return score[r["id"]] * (1 + aff.get(ch, 0) / top) * (1.25 if ch in subs else 1)
-    out, per = [], {}
-    for r in sorted(rows, key=final, reverse=True):
-        k = r["channel_id"] or r["channel_title"]
-        if per.get(k, 0) < 3 and r["channel_id"] not in no_chans:   # variety: at most 3 per channel
-            per[k] = per.get(k, 0) + 1
-            out.append(r)
-            if len(out) >= limit:
-                break
-    return out
-
-
-def new_to_you(c, pid, limit=48):
+def new_to_you(c, pid, limit=48, now=None, taste=None):
     """Channels this profile has never watched or subscribed to, reached through what it does watch.
-    Hop 1: 'up next' of your watches. Hop 2: 'up next' of those suggestions (cached in the background)."""
-    hist = c.execute("SELECT h.video_id FROM history h LEFT JOIN videos v ON v.id=h.video_id WHERE h.profile_id=? "
+    Hop 1: 'up next' of your watches (the last few hours count most). Hop 2: 'up next' of those suggestions (cached
+    in the background). Titles on your topics rank higher; anything you thumbed down, and its "up next", is out.
+    A channel you've been shown and passed over sinks (half as strong every 3 days), so the page turns over."""
+    now = now or time.time()
+    t = taste or Taste(c, pid, now)
+    hist = c.execute("SELECT h.video_id, h.watched_at FROM history h LEFT JOIN videos v ON v.id=h.video_id WHERE h.profile_id=? "
                      "AND COALESCE(v.short,0)=0 ORDER BY h.watched_at DESC LIMIT 100", (pid,)).fetchall()
     watched = {r[0] for r in c.execute("SELECT video_id FROM history WHERE profile_id=?", (pid,))}
     known = {r[0] for r in c.execute("SELECT channel_id FROM subs WHERE profile_id=?", (pid,))}
@@ -467,8 +470,8 @@ def new_to_you(c, pid, limit=48):
         known.add(cid)
         known_titles.add(title)
     no_vids, no_chans = hidden_sets(c, pid)   # "not interested"
-    watched |= no_vids
-    known |= no_chans
+    watched |= no_vids | {v for v, val in t.rate.items() if val < 0}
+    known |= no_chans | {ch for ch, a in t.chan.items() if a < 0}
     known.discard(None)
     known_titles.discard("")
     known_titles.discard(None)
@@ -478,16 +481,29 @@ def new_to_you(c, pid, limit=48):
             for vid, pos in c.execute("SELECT video_id, pos FROM related WHERE src=?", (src,)):
                 into[vid] = into.get(vid, 0) + w / (1 + 0.1 * pos)
     hop1 = {}
-    spread({h[0]: 1 / (1 + 0.05 * i) for i, h in enumerate(hist)}, hop1)
+    spread({h[0]: (.5 + .5 * .5 ** ((now - (h[1] or 0)) / (6 * 3600))) / (1 + 0.05 * i)
+            for i, h in enumerate(hist) if t.rate.get(h[0], 0) >= 0}, hop1)
     cached = {r[0] for r in c.execute("SELECT src FROM related_src")}
     score = dict(hop1)
     spread({v: 0.5 * min(s, 1) for v, s in hop1.items() if v in cached}, score)
     ids = [v for v in sorted(score, key=score.get, reverse=True) if v not in watched][:800]
     if not ids:
         return []
+    shown_at = {}                             # when each video / its channel first appeared on this page
+    for vid, cid, at in c.execute("SELECT s.video_id, v.channel_id, s.first_at FROM shown s LEFT JOIN videos v "
+                                  "ON v.id=s.video_id WHERE s.profile_id=?", (pid,)):
+        for k in (vid, cid):
+            if k:
+                shown_at[k] = min(shown_at.get(k, at), at)
+
+    rows = c.execute(f"SELECT * FROM videos WHERE short=0 AND id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    topic = t.topics(rows)
+
+    def rank(r):
+        at = min(shown_at.get(r["id"], now), shown_at.get(r["channel_id"], now))
+        return score[r["id"]] * 0.5 ** (max(0, now - at) / (3 * 86400)) * (.7 + .6 * max(-.5, topic.get(r["id"], 0)))
     out, seen = [], set()
-    for r in sorted(c.execute(f"SELECT * FROM videos WHERE short=0 AND id IN ({','.join('?' * len(ids))})", ids),
-                    key=lambda r: score[r["id"]], reverse=True):
+    for r in sorted(rows, key=rank, reverse=True):
         k = r["channel_id"] or r["channel_title"]
         if k and k not in seen and r["channel_id"] not in known and r["channel_title"] not in known_titles:
             seen.add(k)                       # one video per new channel
@@ -525,6 +541,322 @@ def warm_related(pid):
         c.close()
 
 
+def discover(c, pid, n=6):
+    """On a schedule: fetch fresh 'up next' lists so Home / New to you keep changing even if nobody opens them.
+    Per profile: lists missing for recent watches, the oldest lists of the last 25 watches (older than 2 days),
+    then one step further out from the best 'new to you' picks. At most 3*n pages from YouTube."""
+    def grab(vids):
+        got = 0
+        for vid in vids:
+            try:
+                fetch_related(c, vid, max_age=0)
+                got += 1
+            except Exception as ex:
+                print("[discover]", vid, repr(ex))
+        return got
+    age = {r[0]: r[1] for r in c.execute("SELECT src, fetched_at FROM related_src")}
+    recent = [r[0] for r in c.execute(
+        "SELECT h.video_id FROM history h LEFT JOIN videos v ON v.id=h.video_id WHERE h.profile_id=? "
+        "AND COALESCE(v.short,0)=0 ORDER BY h.watched_at DESC LIMIT 25", (pid,))]
+    old = time.time() - 2 * 86400
+    done = grab([v for v in recent if v not in age][:n]
+                + sorted((v for v in recent if age.get(v, old) < old), key=age.get)[:n])
+    cached = {r[0] for r in c.execute("SELECT src FROM related_src")}
+    return done + grab([r["id"] for r in new_to_you(c, pid) if r["id"] not in cached][:n])
+
+
+def discover_all():
+    c = connect()
+    try:
+        for (pid,) in c.execute("SELECT id FROM profiles").fetchall():
+            n = discover(c, pid) + discover_more(c, pid)
+            if n:
+                print(f"[discover] profile {pid}: {n} lists fetched")
+    finally:
+        c.close()
+
+
+# ---------------------------------------------------------------- Home: the recommendation engine
+# All of it is worked out here from this profile's own activity. YouTube only supplies lists of videos ("up next"
+# lists, search results, channel pages), the same ones it shows any visitor who isn't logged in.
+#
+# 1. Candidates come from several sources:
+#      watch    "up next" of what you watched lately; the last few hours count most, so Home follows your mood
+#      liked    "up next" of videos you gave a thumbs up (your lasting tastes)
+#      subs     fresh uploads from your subscriptions
+#      back     older videos from your subscriptions that you haven't seen
+#      search   results of searches you made (recent and repeated ones count more), re-run in the background
+#      topic    searches YakTube makes by itself from the words in the titles you watch and like
+#      explore  New to you: channels you haven't tried, reached through ones you like
+# 2. Each candidate gets a score: how strongly its sources point at it, x how much you like its channel, x how well
+#    its title matches the topics you watch, x how new it is to you (every visit where it was on screen and you
+#    passed it over, it sinks; it recovers over a few days).
+# 3. Each source's weight is learned from what you do: of the videos it put on your screen, how many you went on
+#    to watch (a thumbs up counts double, a thumbs down as a miss). Sources that work for you get more of Home;
+#    a little randomness (Thompson sampling) keeps giving the others a chance.
+# 4. Home is filled from the top: at most 2 per channel in the first 24 and 3 overall (more only once nothing else
+#    is left), one "up next" list or search can't take over the page, and every 6th place goes to something new (explore, topic or back catalogue).
+#    It reshuffles after every video you watch and every 15 minutes.
+SOURCES = {"watch": .12, "liked": .10, "subs": .14, "back": .05, "search": .08, "topic": .05, "explore": .05}  # prior hit rates
+WHY = {"watch": "Because you watched", "liked": "Because you liked", "subs": "New from your subscriptions",
+       "back": "From a channel you subscribe to", "search": "From your search", "topic": "A topic you watch",
+       "explore": "A channel new to you"}
+STOP = set("""the and for with from that this these those you your yours are was were been being its it's into out
+about than then what how why when where who which not can will just all any more most very via get got one two
+new video videos official full part episode live shorts short trailer review reaction vlog best top ever first last
+how-to don't i'm you're we're they're here there have has had our ours their them his her she him""".split())
+WORD_RE = re.compile(r"[^\W_]+(?:'[^\W_]+)?")
+DAY = 86400
+
+
+def words(title):
+    return [w for w in WORD_RE.findall((title or "").lower()) if len(w) > 2 and not w.isdigit() and w not in STOP]
+
+
+class Taste:
+    """What one profile likes, from its history (how much of each video it watched, how often, how lately) and its
+    thumbs: a score per channel, per word and per word pair, all fading with a 45-day half-life."""
+
+    def __init__(self, c, pid, now):
+        self.rate = dict(c.execute("SELECT video_id, val FROM ratings WHERE profile_id=?", (pid,)).fetchall())
+        self.chan, self.word, self.pair, self.eng = {}, {}, {}, {}
+        for r in c.execute("SELECT h.video_id, h.watched_at, h.times, h.best, h.dur, v.channel_id, v.title FROM history h "
+                           "JOIN videos v ON v.id=h.video_id WHERE h.profile_id=? AND v.short=0 "
+                           "ORDER BY h.watched_at DESC LIMIT 400", (pid,)):
+            done = min(1, (r["best"] or 0) / r["dur"]) if r["dur"] else .5    # unknown (older history): call it half
+            e = .4 + done + .3 * min((r["times"] or 1) - 1, 3)
+            val = self.rate.get(r["video_id"], 0)
+            e = e + 1.5 if val > 0 else -2 if val < 0 else e
+            self.eng[r["video_id"]] = e
+            self.add(r["channel_id"], r["title"], e * .5 ** ((now - (r["watched_at"] or now)) / (45 * DAY)))
+        for r in c.execute("SELECT v.channel_id, v.title, r.val FROM ratings r JOIN videos v ON v.id=r.video_id "
+                           "WHERE r.profile_id=? AND r.video_id NOT IN (SELECT video_id FROM history WHERE profile_id=?)",
+                           (pid, pid)):                                   # rated without watching (Shorts, mostly)
+            self.add(r["channel_id"], r["title"], 1 if r["val"] > 0 else -1.5)
+        self.top = max([v for v in self.chan.values() if v > 0], default=1)
+
+    def add(self, ch, title, w):
+        if ch:
+            self.chan[ch] = self.chan.get(ch, 0) + w
+        ws = words(title)
+        k = w / max(1, len(ws)) ** .5
+        for x in set(ws):
+            self.word[x] = self.word.get(x, 0) + k
+        for x in set(zip(ws, ws[1:])):
+            self.pair[x] = self.pair.get(x, 0) + k
+
+    def channel(self, ch, subbed=False):
+        """x1 for a channel you know nothing about, up to x2 for your favourite, down to x0.25 if you thumb it down."""
+        a = self.chan.get(ch, 0)
+        f = 1 + a / self.top if a >= 0 else max(.25, 1 / (1 - a))
+        return f * (1.15 if subbed else 1)
+
+    def topics(self, rows):
+        """How well each title matches your words (rarer words count more), from -1 to 1."""
+        df, toks = {}, {}
+        for r in rows:
+            toks[r["id"]] = set(words(r["title"]))
+            for w in toks[r["id"]]:
+                df[w] = df.get(w, 0) + 1
+        n = len(rows) or 1
+        raw = {vid: sum(self.word.get(w, 0) * math.log(1 + n / df[w]) for w in ws) / max(1, len(ws)) ** .5
+               for vid, ws in toks.items()}
+        top = max([abs(v) for v in raw.values()], default=0) or 1
+        return {vid: v / top for vid, v in raw.items()}
+
+    def queries(self, n=2, skip=()):
+        """Searches to try for you: the word pairs that sum up what you watch (e.g. "quantum mechanics")."""
+        best = sorted(((w, " ".join(p)) for p, w in self.pair.items() if w > 0 and min(self.word.get(x, 0) for x in p) > 0),
+                      reverse=True) + sorted(((w, x) for x, w in self.word.items() if w > 0), reverse=True)  # then single words
+        return [q for _, q in best if q not in skip][:n]
+
+
+def source_weights(c, pid, now, rng):
+    """How well each source has worked for this profile lately, as a multiplier (1 = as expected). Each is a draw from
+    its Beta distribution, so a source that's barely been tried sometimes gets a go."""
+    seen = {s: [0, 0] for s in SOURCES}                       # shown, watched
+    for src, won, val in c.execute(
+            "SELECT i.src, h.watched_at >= i.first_at, COALESCE(r.val,0) FROM impressions i LEFT JOIN history h ON "
+            "h.profile_id=i.profile_id AND h.video_id=i.video_id LEFT JOIN ratings r ON r.profile_id=i.profile_id AND "
+            "r.video_id=i.video_id WHERE i.profile_id=? AND i.first_at>?", (pid, now - 30 * DAY)):
+        if src in seen:
+            hit = 1 if won and val >= 0 else 0
+            seen[src][0] += 1 + (val > 0)
+            seen[src][1] += hit * (2 if val > 0 else 1)
+    out = {}
+    for s, p in SOURCES.items():
+        shown, won = seen[s]
+        draw = rng.betavariate(won + 40 * p, shown - won + 40 * (1 - p)) / p   # 1 = doing as well as expected
+        out[s] = min(2.5, max(.4, draw ** .5))                # square root: it steers Home, it doesn't flip it
+    return out
+
+
+def home_feed(c, pid, limit=60, now=None, seed=None):
+    """The Home page: a list of (video row, source, score, why). See the notes above."""
+    now = now or time.time()
+    last = c.execute("SELECT MAX(watched_at) FROM history WHERE profile_id=?", (pid,)).fetchone()[0] or 0
+    rng = random.Random(f"{pid}:{last}:{int(now // 900)}" if seed is None else seed)   # same until you watch something
+    t = Taste(c, pid, now)
+    subs = {r[0] for r in c.execute("SELECT channel_id FROM subs WHERE profile_id=?", (pid,))}
+    no_vids, no_chans = hidden_sets(c, pid)
+    skip = {r[0] for r in c.execute("SELECT video_id FROM history WHERE profile_id=?", (pid,))} | no_vids
+    skip |= set(t.rate)                                       # rated = seen it (even if not played here)
+    cand = {}                                                 # video -> {source: [weight, strongest root, its weight]}
+
+    def add(vid, src, w, root):
+        if vid in skip or w <= 0:
+            return
+        d = cand.setdefault(vid, {}).setdefault(src, [0, root, 0])
+        d[0] += w                                             # several lists pointing at one video add up
+        if w > d[2]:
+            d[1], d[2] = root, w
+
+    def lists(src, roots):                                    # roots: (list key, weight, label)
+        for key, w, root in roots:
+            for vid, pos in c.execute("SELECT video_id, pos FROM related WHERE src=?", (key,)):
+                add(vid, src, w / (1 + .1 * pos), root)
+    recent = c.execute("SELECT h.video_id, h.watched_at FROM history h JOIN videos v ON v.id=h.video_id WHERE "
+                       "h.profile_id=? AND v.short=0 ORDER BY h.watched_at DESC LIMIT 25", (pid,)).fetchall()
+    lists("watch", [(v, (.3 + 1.0 * .5 ** ((now - at) / (4 * 3600))) / (1 + .1 * i) * min(t.eng.get(v, 1), 2) / 1.4, v)
+                    for i, (v, at) in enumerate(recent) if t.eng.get(v, 1) > 0])
+    lists("liked", [(v, .2 + .4 * .5 ** ((now - at) / (14 * DAY)), v) for v, at in c.execute(
+        "SELECT video_id, at FROM ratings WHERE profile_id=? AND val>0 ORDER BY at DESC LIMIT 50", (pid,))])
+    for q, at, n, auto in c.execute("SELECT q, at, n, auto FROM searches WHERE profile_id=? ORDER BY at DESC LIMIT 40", (pid,)):
+        w = (.15 + .55 * .5 ** ((now - at) / (7 * DAY))) * (1 + .3 * math.log(n or 1))
+        lists("topic" if auto else "search", [("q:" + q, w * (.7 if auto else 1), "q:" + q)])
+    for vid, ch, pub in c.execute("SELECT v.id, v.channel_id, v.published FROM videos v JOIN subs s ON s.channel_id="
+                                  "v.channel_id AND s.profile_id=? WHERE v.short=0 ORDER BY v.published DESC LIMIT 1500", (pid,)):
+        age = (now - (pub or 0)) / DAY
+        if age < 21:
+            add(vid, "subs", .1 + .8 * (1 - age / 21), "subs")
+        else:
+            add(vid, "back", .3 * .5 ** (age / 365), "back:" + (ch or ""))
+    for i, r in enumerate(new_to_you(c, pid, 24, now, taste=t)):   # built from the same lists: only adds what's new
+        if r["id"] not in cand:
+            add(r["id"], "explore", .35 * (1 - i / 48), "explore")
+    if not cand:
+        return []
+    W = source_weights(c, pid, now, rng)
+    raw = {vid: sum(W[s] * d[0] for s, d in srcs.items()) for vid, srcs in cand.items()}
+    ids = sorted(raw, key=raw.get, reverse=True)[:1500]
+    rows = c.execute(f"SELECT * FROM videos WHERE short=0 AND id IN ({','.join('?' * len(ids))})", ids).fetchall()
+    topic = t.topics(rows)
+    shown = {r[0]: (r[1], r[2]) for r in c.execute("SELECT video_id, n, last_at FROM impressions WHERE profile_id=?", (pid,))}
+    items = []
+    for r in rows:
+        if r["channel_id"] in no_chans:
+            continue
+        srcs = cand[r["id"]]
+        src = max(srcs, key=lambda s: W[s] * srcs[s][0])
+        n, at = shown.get(r["id"], (0, now))
+        score = (raw[r["id"]] * t.channel(r["channel_id"], r["channel_id"] in subs)
+                 * (.55 + .9 * max(-.5, topic.get(r["id"], 0)))          # x0.1 (off-topic) .. x1.45 (right on it)
+                 * .6 ** (n * .5 ** ((now - at) / (3 * DAY)))           # passed over before: sinks, recovers in days
+                 * rng.uniform(.92, 1.08))
+        items.append([score, r, src, srcs[src][1]])
+    out, per, used = [], {}, {}
+    while items and len(out) < limit:
+        cap = 2 if len(out) < 24 else 3
+        pool = [it for it in items if per.get(it[1]["channel_id"] or it[1]["channel_title"], 0) < cap] or items
+        if len(out) % 6 == 5:                                 # every 6th place: something new
+            pool = [it for it in pool if it[2] in ("explore", "topic", "back")] or pool
+        it = max(pool, key=lambda it: it[0] * .7 ** used.get(it[3], 0))
+        items.remove(it)
+        k = it[1]["channel_id"] or it[1]["channel_title"]
+        per[k] = per.get(k, 0) + 1
+        used[it[3]] = used.get(it[3], 0) + 1
+        out.append((it[1], it[2], it[0], why(c, it[2], it[3])))
+    return out
+
+
+def why(c, src, root):
+    """A short reason for a pick, e.g. 'Because you watched: <title>'."""
+    if src in ("watch", "liked"):
+        r = c.execute("SELECT title FROM videos WHERE id=?", (root,)).fetchone()
+        return f"{WHY[src]}: {r[0]}" if r and r[0] else WHY[src]
+    if root.startswith("q:"):
+        return f"{WHY[src]}: “{root[2:]}”"
+    return WHY[src]
+
+
+def save_search(c, pid, q, vids, auto=0):
+    """Remember a search (for Home) and its results, as the list 'q:<words>'."""
+    q = " ".join(q.lower().split())[:120]
+    if not q:
+        return
+    c.execute("INSERT INTO searches(profile_id,q,at,n,auto) VALUES(?,?,?,1,?) ON CONFLICT(profile_id,q) DO UPDATE SET "
+              "at=excluded.at, n=n+1-excluded.auto, auto=MIN(auto,excluded.auto)", (pid, q, int(time.time()), auto))
+    c.execute("DELETE FROM related WHERE src=?", ("q:" + q,))
+    c.executemany("INSERT OR IGNORE INTO related(src,video_id,pos) VALUES(?,?,?)",
+                  [("q:" + q, v["id"], i) for i, v in enumerate(vids[:20])])
+    c.execute("INSERT OR REPLACE INTO related_src(src,fetched_at) VALUES(?,?)", ("q:" + q, int(time.time())))
+
+
+def discover_more(c, pid, n=3, now=None):
+    """On the same schedule as discover(): keep Home's other sources topped up. Per profile, at most:
+    n thumbed-up videos' "up next" lists, n past searches re-run, 2 topic searches, 2 subscriptions read in depth."""
+    now = now or time.time()
+    age = {r[0]: r[1] for r in c.execute("SELECT src, fetched_at FROM related_src")}
+    done = 0
+
+    def stale(key, days):
+        return age.get(key, 0) < now - days * DAY
+    for (vid,) in c.execute("SELECT video_id FROM ratings WHERE profile_id=? AND val>0 ORDER BY at DESC LIMIT 30",
+                            (pid,)).fetchall():
+        if done < n and stale(vid, 3):
+            try:
+                fetch_related(c, vid, max_age=0)
+                done += 1
+            except Exception as ex:
+                print("[discover] liked", vid, repr(ex))
+    t = Taste(c, pid, now)
+    have = {r[0]: r[1] for r in c.execute("SELECT q, auto FROM searches WHERE profile_id=?", (pid,))}
+    for q in t.queries(2, skip={q for q, auto in have.items() if not auto}):
+        c.execute("INSERT INTO searches(profile_id,q,at,n,auto) VALUES(?,?,?,1,1) ON CONFLICT DO NOTHING", (pid, q, int(now)))
+    redo = [r[0] for r in c.execute("SELECT q FROM searches WHERE profile_id=? ORDER BY auto, at DESC LIMIT 12", (pid,))]
+    for q in [q for q in redo if stale("q:" + q, .5)][:n + 2]:
+        try:
+            save_search(c, pid, q, search(c, q), auto=have.get(q, 1))
+            done += 1
+        except Exception as ex:
+            print("[discover] search", q, repr(ex))
+    favs = sorted((cid for (cid,) in c.execute("SELECT channel_id FROM subs WHERE profile_id=?", (pid,))),
+                  key=lambda ch: t.chan.get(ch, 0), reverse=True)
+    for cid in [ch for ch in favs if stale("c:" + ch, 7)][:2]:   # newest ~30 on the channel page, beyond RSS's 15
+        try:
+            refresh_channel(c, cid, deep=True)
+            c.execute("INSERT OR REPLACE INTO related_src(src,fetched_at) VALUES(?,?)", ("c:" + cid, int(now)))
+            done += 1
+        except Exception as ex:
+            print("[discover] channel", cid, repr(ex))
+    return done
+
+
+def warm_one(vid):
+    c = connect()
+    try:
+        fetch_related(c, vid)
+    except Exception as ex:
+        print("[warm]", vid, repr(ex))
+    finally:
+        c.close()
+
+
+def after_watch(pid, vid):
+    """Background, the moment a video counts as watched: make sure its "up next" list is in, so Home can follow
+    straight away, and look one step past it for New to you."""
+    c = connect()
+    try:
+        rel = fetch_related(c, vid)
+        cached = {r[0] for r in c.execute("SELECT src FROM related_src")}
+        for r in [r for r in rel if r["id"] not in cached][:2]:
+            fetch_related(c, r["id"])
+    except Exception as ex:
+        print("[after watch]", vid, repr(ex))
+    finally:
+        c.close()
+
+
 def refresh_stale(force=False):
     """Refresh every subscribed channel whose feed is older than REFRESH_MIN."""
     c = connect()
@@ -551,14 +883,18 @@ def tidy(c, now=None):
     """Keep the database small: forget old "Up next" lists and videos nobody needs any more.
     Never touches profiles, subscriptions or watch history. Returns how many videos were removed."""
     now = now or int(time.time())
-    # stale lists go, except those of each profile's last 25 watches (For you / New to you are built from them)
+    # stale lists go, except those of each profile's last 25 watches (Home / New to you are built from them)
     stale = ("SELECT src FROM related_src WHERE fetched_at < ? AND src NOT IN (SELECT video_id FROM history h WHERE "
              "(SELECT COUNT(*) FROM history h2 WHERE h2.profile_id=h.profile_id AND h2.watched_at>h.watched_at) < 25)")
     old = now - 30 * 86400
     c.execute(f"DELETE FROM related WHERE src IN ({stale})", (old,))
     c.execute(f"DELETE FROM related_src WHERE src IN ({stale})", (old,))
+    c.execute("DELETE FROM shown WHERE first_at < ?", (old,))
+    c.execute("DELETE FROM impressions WHERE last_at < ?", (now - 90 * 86400,))
+    c.execute("DELETE FROM searches WHERE auto=1 AND at < ?", (old,))   # YakTube's own topic searches, once stale   # passed-over picks get another chance after a month
     n = c.execute(
         "DELETE FROM videos WHERE id NOT IN (SELECT video_id FROM history) AND id NOT IN (SELECT video_id FROM later) "
+        "AND id NOT IN (SELECT video_id FROM ratings) "
         "AND id NOT IN (SELECT video_id FROM related) AND id NOT IN (SELECT src FROM related_src) "
         "AND (CASE WHEN channel_id IN (SELECT channel_id FROM subs) THEN published < ? ELSE published < ? END)",
         (now - 365 * 86400, now - 60 * 86400)).rowcount
@@ -569,10 +905,16 @@ def tidy(c, now=None):
 
 
 def refresher_loop():
-    last_tidy = 0
+    last_tidy = last_discover = 0
     while True:
         try:
             refresh_stale()
+            if DISCOVER_HOURS and time.time() - last_discover > DISCOVER_HOURS * 3600:   # and once at start-up
+                last_discover = time.time()
+                try:
+                    discover_all()
+                except Exception as ex:
+                    print("[discover]", ex)
             try:
                 refresh_outside()
             except Exception as ex:
@@ -599,9 +941,19 @@ a{color:inherit;text-decoration:none}
 header{position:sticky;top:0;z-index:5;display:flex;gap:14px;align-items:center;padding:10px 20px;
   background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
 .logo{font-weight:800;font-size:20px;letter-spacing:-.6px;white-space:nowrap}.logo b{color:var(--accent)}
-nav{display:flex;gap:2px}nav a{padding:6px 12px;border-radius:999px;color:var(--muted);white-space:nowrap}
-nav a:hover{color:var(--fg)}nav a.on{background:var(--card);color:var(--fg);box-shadow:0 0 0 1px var(--line)}
-form.go{flex:1;max-width:520px;margin-left:auto;display:flex}
+header .logo{width:196px;flex:none;padding-left:8px}
+form.go{flex:1;max-width:620px;margin:0 auto;display:flex}
+nav svg,.rate svg{width:22px;height:22px;flex:none;fill:currentColor}
+.rib,.bot{display:none}
+.shell{display:flex;align-items:flex-start}
+.side{position:sticky;top:57px;width:228px;flex:none;max-height:calc(100vh - 57px);overflow-y:auto;padding:10px 10px 20px;scrollbar-width:thin}
+.side a{display:flex;align-items:center;gap:20px;padding:9px 14px;border-radius:10px;white-space:nowrap}
+.side a:hover{background:var(--card)}.side a.on{background:var(--card);font-weight:650;box-shadow:0 0 0 1px var(--line)}
+.side a.on svg{color:var(--accent)}
+.side hr{border:0;border-top:1px solid var(--line);margin:10px 6px}
+@media(max-width:1100px) and (min-width:721px){header .logo{width:auto}.side{width:80px;padding:6px 4px}
+  .side a{flex-direction:column;gap:5px;padding:13px 2px 10px;font-size:10.5px;text-align:center;white-space:normal;line-height:1.15}
+  .side a.on{box-shadow:none}.side hr{display:none}}
 input[type=text]{width:100%;padding:8px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--fg);font:inherit}
 input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .btn{display:inline-block;padding:7px 16px;border-radius:999px;border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
@@ -612,7 +964,17 @@ input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .sw.on i{background:var(--accent)}.sw.on i:after{left:14px}
 .acts{display:flex;gap:8px}
 .av{width:34px;height:34px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;flex:none}
-main{max-width:1440px;margin:0 auto;padding:22px 20px 60px}
+main{flex:1;min-width:0;max-width:1720px;margin:0 auto;padding:22px 24px 60px}
+.shelf{grid-column:1/-1;margin:4px 0 6px}
+.shelf h2{display:flex;align-items:center;gap:8px;font-size:18px;margin:0 0 12px}.shelf h2 svg{width:22px;height:22px;fill:var(--accent)}
+.sgrid{display:grid;grid-template-columns:repeat(4,minmax(0,218px));gap:16px}   /* YouTube's own: 218x326 */
+.scard img{width:100%;aspect-ratio:2/3;object-fit:cover;border-radius:12px;background:var(--line);display:block}
+.scard h3{font-size:14px;font-weight:600;margin:8px 0 2px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.scard:hover h3{color:var(--accent)}
+.rate{display:inline-flex;border-radius:999px;background:var(--card);box-shadow:0 0 0 1px var(--line);overflow:hidden}
+.rate button{display:flex;align-items:center;padding:4px 14px;border:0;background:none;color:var(--muted);cursor:pointer}
+.rate button+button{border-left:1px solid var(--line)}.rate button:hover{color:var(--fg)}
+.rate svg{width:19px;height:19px}.rate .dn svg{transform:rotate(180deg)}.rate button.on{color:var(--accent)}
 h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .bar{display:flex;align-items:center;gap:12px;margin-bottom:18px;flex-wrap:wrap}.bar h1{margin:0;margin-right:auto}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:24px 16px}
@@ -652,17 +1014,31 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .profiles .av{width:110px;height:110px;font-size:44px;border-radius:24px;margin-bottom:10px;transition:transform .12s}
 .profiles button:hover .av{transform:scale(1.05)}
 .center{text-align:center}
-@media(max-width:720px){header{flex-wrap:wrap;padding:10px 16px;row-gap:8px}header>.av{order:1;margin-left:auto}
-  nav{order:2;flex-basis:100%;overflow-x:auto;scrollbar-width:none}nav::-webkit-scrollbar{display:none}
-  nav a{padding:6px 9px;font-size:14px}form.go{order:3;flex-basis:100%;max-width:none}main{padding:16px}
-  .grid{grid-template-columns:1fr 1fr;gap:16px 10px}.row img{width:130px}}
+.why{color:var(--accent);font-size:12px;margin-top:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media(max-width:720px){header{flex-wrap:wrap;padding:10px 16px;row-gap:10px}header>.av,.side{display:none}
+  header .logo{width:auto;padding:0}
+  .rib{display:flex;gap:8px;order:2;flex-basis:calc(100% + 32px);margin:0 -16px;padding:0 16px;overflow-x:auto;scrollbar-width:none}
+  .rib::-webkit-scrollbar{display:none}
+  .rib a{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:9px;background:var(--card);
+    box-shadow:0 0 0 1px var(--line);font-size:14px;font-weight:550;white-space:nowrap}
+  .rib a.on{background:var(--fg);color:var(--bg);box-shadow:none}
+  .rib .av{width:20px;height:20px;font-size:11px}
+  form.go{order:3;flex-basis:100%;max-width:none}
+  main{padding:16px 16px calc(80px + env(safe-area-inset-bottom))}
+  .bot{display:flex;position:fixed;left:0;right:0;bottom:0;z-index:6;padding-bottom:env(safe-area-inset-bottom);
+    background:color-mix(in srgb,var(--bg) 94%,transparent);backdrop-filter:blur(10px);border-top:1px solid var(--line)}
+  .bot a{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 0 7px;font-size:11px;color:var(--muted)}
+  .bot a.on{color:var(--fg);font-weight:600}.bot a.on svg{color:var(--accent)}
+  .grid{grid-template-columns:1fr 1fr;gap:16px 10px}.row img{width:130px}
+  .sgrid{grid-template-columns:1fr 1fr;gap:12px 10px}}
 @media(max-width:440px){.grid{grid-template-columns:1fr}}
 """
 
 # Extra styles when the page is shown by the YakTube TV app (its browser says "YakTubeTV").
 TV_CSS = """<style>
 :root{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
-body{font-size:17px}header{position:static}main{padding:18px 28px 40px}
+body{font-size:17px}header{position:static}main{padding:18px 28px 40px}.side{top:0;max-height:100vh}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
@@ -775,11 +1151,11 @@ var tr=yakTrack("__VID__");yakPlayer(f,function(st,m){var i=m.info||{};tr(i.curr
 # tap (or OK) to pause. A see-through layer over the player catches the swipes; the player itself never gets touched.
 SHORTS_CSS = """<style>html,body{overflow:hidden;overscroll-behavior:none;background:#000}
 #sh{position:fixed;inset:0;background:#000;color:#fff;z-index:10;-webkit-user-select:none;user-select:none}
-#pl,#info{position:absolute;left:50%;transform:translateX(-50%);width:min(100vw,56.25vh);width:min(100vw,56.25dvh)}
+#pl,#info,#pb{position:absolute;left:50%;transform:translateX(-50%);width:min(100vw,56.25vh);width:min(100vw,56.25dvh)}
 #pl{top:0;bottom:0}#tap{position:absolute;inset:0;touch-action:none;cursor:pointer}
 #x{position:absolute;top:12px;left:12px;width:44px;height:44px;border-radius:50%;background:rgba(0,0,0,.5);
   display:grid;place-items:center;font-size:24px;line-height:1;z-index:2}
-#info{bottom:0;padding:48px 16px 22px;background:linear-gradient(transparent,rgba(0,0,0,.7));pointer-events:none}
+#info{bottom:0;padding:48px 16px 28px;background:linear-gradient(transparent,rgba(0,0,0,.7));pointer-events:none}
 #info b{display:block;font-size:15px;line-height:1.3}#info span{font-size:13px;opacity:.8}
 #snd{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);background:rgba(0,0,0,.7);padding:16px 28px;
   border-radius:999px;font-size:20px;font-weight:600;pointer-events:none;white-space:nowrap}
@@ -787,22 +1163,62 @@ SHORTS_CSS = """<style>html,body{overflow:hidden;overscroll-behavior:none;backgr
 #ud{position:absolute;right:24px;top:50%;transform:translateY(-50%);display:flex;flex-direction:column;gap:14px;z-index:2}
 #ud button{width:52px;height:52px;border-radius:50%;border:0;background:rgba(255,255,255,.16);color:#fff;font-size:20px;cursor:pointer}
 @media (hover:none){#ud{display:none}}
-#sh .empty{position:absolute;top:30%;left:0;right:0;color:#ccc}</style>"""
+#sh .empty{position:absolute;top:30%;left:0;right:0;color:#ccc}
+#rt[hidden],#pb[hidden]{display:none}
+#rt{position:absolute;bottom:120px;left:min(calc(50% + 28.125vh + 14px),calc(100% - 64px));display:flex;flex-direction:column;gap:16px;z-index:2}
+#rt button{width:48px;height:48px;border-radius:50%;border:0;background:rgba(40,40,40,.75);color:#fff;cursor:pointer;display:grid;place-items:center}
+#rt svg{width:22px;height:22px;fill:currentColor}#rd svg{transform:rotate(180deg)}#rt button.on{background:#fff;color:#000}
+#pb{bottom:0;height:18px;z-index:3;cursor:pointer;touch-action:none;display:flex;align-items:flex-end}
+#pb i{position:relative;display:block;width:100%;height:3px;background:rgba(255,255,255,.3);transition:height .12s}
+#pb b{position:absolute;left:0;top:0;bottom:0;width:0;background:#f03}
+#pb b:after{content:"";position:absolute;right:-6px;top:50%;width:12px;height:12px;margin-top:-6px;border-radius:50%;background:#f03;
+  transform:scale(0);transition:transform .12s}
+#pb:hover i,#pb.drag i{height:6px}#pb:hover b:after,#pb.drag b:after{transform:scale(1)}
+#tm{position:absolute;left:50%;bottom:34px;transform:translateX(-50%);font-size:15px;font-weight:600;
+  text-shadow:0 1px 3px #000;pointer-events:none;z-index:3}
+#toast{position:absolute;left:50%;top:72px;transform:translateX(-50%);background:rgba(30,30,30,.92);padding:10px 18px;
+  border-radius:999px;font-size:14px;pointer-events:none;z-index:4;white-space:nowrap}</style>"""
 SHORTS_JS = """<script>(function(){var L=__LIST__,i=0,seen={},$=function(x){return document.getElementById(x)};
 function close(){var r=document.referrer;if(r&&r.indexOf(location.origin+"/")==0&&history.length>1)history.back();else location.href="/"}
 $("x").onclick=function(k){k.preventDefault();close()};
 addEventListener("keydown",function(k){var h={ArrowDown:next,PageDown:next,ArrowUp:prev,PageUp:prev,Enter:tap," ":tap,
   MediaPlayPause:tap,Escape:close}[k.key];if(h){k.preventDefault();k.stopImmediatePropagation();h()}},true);
-if(!L.length)return;
+if(!L.length){["rt","pb"].forEach(function(x){$(x).hidden=true});return}
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media";f.referrerPolicy="strict-origin-when-cross-origin";
 f.style.cssText="width:100%;height:100%;border:0;display:block;pointer-events:none";
 f.src="__EMBED__"+L[0].id+"?autoplay=1&controls=0&rel=0&playsinline=1&modestbranding=1&iv_load_policy=3&enablejsapi=1&origin="+encodeURIComponent(location.origin);
 $("pl").attachShadow({mode:"open"}).appendChild(f);
-var p=yakPlayer(f,function(st){if(st.s==0){p.cmd("seekTo",[0,true]);p.cmd("playVideo")}
+var pt={t:0,d:0,at:0};
+var p=yakPlayer(f,function(st,m){var o=m.info||{};if(typeof o.currentTime=="number"){pt.t=o.currentTime;pt.at=Date.now()}if(o.duration)pt.d=o.duration;
+  if(st.s==0){p.cmd("seekTo",[0,true]);p.cmd("playVideo")}
   if(st.s==1&&!seen[L[i].id]){seen[L[i].id]=1;fetch("/seen",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"v="+L[i].id})}
   $("snd").hidden=!st.muted;$("pz").hidden=st.s!=2});
-function show(){$("ti").textContent=L[i].title;$("ch").textContent=L[i].channel;history.replaceState(null,"","/shorts?v="+L[i].id)}
-function go(n){i=(n+L.length)%L.length;p.st.off=0;p.st.s=-1;p.cmd("loadVideoById",[L[i].id,0]);show()}
+function rt(){$("ru").className=L[i].r==1?"on":"";$("rd").className=L[i].r==-1?"on":""}
+function rate(n){var it=L[i];fetch("/rate",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"v="+it.id+"&r="+n})
+  .then(function(x){return x.text()}).then(function(s){it.r=+s;rt()})}
+$("ru").onclick=function(){rate(1)};$("rd").onclick=function(){rate(-1)};
+// Share: the phone's own share sheet where there is one, otherwise the YouTube link is copied.
+var tt;function toast(s){$("toast").textContent=s;$("toast").hidden=false;clearTimeout(tt);tt=setTimeout(function(){$("toast").hidden=true},2000)}
+$("sr").onclick=function(){var it=L[i],u="https://youtube.com/shorts/"+it.id;
+  if(navigator.share){navigator.share({title:it.title,url:u}).catch(function(){});return}
+  function old(){var a=document.createElement("textarea");a.value=u;a.style.cssText="position:fixed;opacity:0";document.body.appendChild(a);a.select();
+    var ok=false;try{ok=document.execCommand("copy")}catch(x){}a.remove();ok?toast("Link copied"):prompt("Copy this link",u)}
+  if(navigator.clipboard&&window.isSecureContext)navigator.clipboard.writeText(u).then(function(){toast("Link copied")},old);else old()};
+// Progress bar along the bottom, like YouTube's: the player reports the time a few times a second, in between it's
+// worked out from the clock so the bar moves smoothly. Drag (or tap) it to jump; the time shows while dragging.
+var bar=$("pb"),drag=null;
+function tf(x){x=Math.max(0,Math.floor(x));return Math.floor(x/60)+":"+("0"+x%60).slice(-2)}
+function now(){return Math.min(pt.d||0,pt.t+(p.st.s==1&&pt.at?(Date.now()-pt.at)/1000:0))}
+(function draw(){var k=drag!=null?drag:pt.d?now()/pt.d:0;bar.firstChild.firstChild.style.width=(k*100)+"%";requestAnimationFrame(draw)})();
+function at(e){var r=bar.getBoundingClientRect();return Math.min(1,Math.max(0,(e.clientX-r.left)/r.width))}
+bar.addEventListener("pointerdown",function(e){if(!pt.d)return;e.stopPropagation();bar.setPointerCapture(e.pointerId);drag=at(e);bar.classList.add("drag");
+  $("tm").hidden=false;$("tm").textContent=tf(drag*pt.d)+" / "+tf(pt.d)});
+bar.addEventListener("pointermove",function(e){if(drag==null)return;drag=at(e);$("tm").textContent=tf(drag*pt.d)+" / "+tf(pt.d)});
+function drop(e){if(drag==null)return;pt.t=drag*pt.d;pt.at=Date.now();p.cmd("seekTo",[pt.t,true]);drag=null;bar.classList.remove("drag");$("tm").hidden=true}
+bar.addEventListener("pointerup",drop);bar.addEventListener("pointercancel",drop);
+["click","touchstart","touchend"].forEach(function(n){bar.addEventListener(n,function(e){e.stopPropagation()})});
+function show(){rt();$("ti").textContent=L[i].title;$("ch").textContent=L[i].channel;history.replaceState(null,"","/shorts?v="+L[i].id)}
+function go(n){pt.t=pt.d=pt.at=0;i=(n+L.length)%L.length;p.st.off=0;p.st.s=-1;p.cmd("loadVideoById",[L[i].id,0]);show()}
 function next(){go(i+1)}function prev(){go(i-1)}
 function tap(){if(p.st.muted){p.cmd("unMute");p.cmd("playVideo");p.st.muted=false;$("snd").hidden=true}
   else if(p.st.s==2){p.cmd("playVideo");p.st.s=1;$("pz").hidden=true}else{p.cmd("pauseVideo");p.st.s=2;$("pz").hidden=false}}
@@ -879,7 +1295,7 @@ def thumb(vid):
     return f"https://i.ytimg.com/vi/{vid}/mqdefault.jpg"
 
 
-def card(v, seen=False, saved=False, hide=False):
+def card(v, seen=False, saved=False, hide=False, src=None, why=None):
     short = "short" in v.keys() and v["short"]
     meta = " · ".join(x for x in ("Short" if short else "", views(v["views"]), ago(v["published"])) if x)
     href = ("/shorts?v=" if short else "/watch?v=") + v["id"]   # Shorts open in the full-screen Shorts player
@@ -889,18 +1305,37 @@ def card(v, seen=False, saved=False, hide=False):
     ch = f'<span data-ch="{cid}">{e(v["channel_title"] or "")}</span>' if cid and CID_RE.fullmatch(cid) else e(v["channel_title"] or "")
     extra = "" if short else (f'<span class="lt{" on" if saved else ""}" data-lt="{v["id"]}" title="Watch later">{"✓" if saved else "＋"}</span>'
                               + (f'<span class="no" data-no="{v["id"]}" title="Not interested">✕</span>' if hide else ""))
-    return (f'<a class="card{" seen" if seen else ""}" href="{href}">'
+    tag = f' data-v="{v["id"]}" data-s="{src}"' if src else ""     # Home: reports when it's been on screen
+    return (f'<a class="card{" seen" if seen else ""}" href="{href}"{tag}>'
             f'<span class="th"><img loading="lazy" src="{thumb(v["id"])}" alt="">{extra}</span><h3>{e(v["title"] or v["id"])}</h3>'
-            f'<div class="meta">{ch}</div><div class="meta">{meta}</div></a>')
+            f'<div class="meta">{ch}</div><div class="meta">{meta}</div>'
+            + (f'<div class="why">{e(why)}</div>' if why else "") + '</a>')
 
 
-def sub_button(cid, subbed, nxt):
-    """Subscribe / Subscribed button for a channel; `nxt` is the page to come back to."""
+def short_card(v):
+    """A Short on Home's shelves: tall picture (YouTube's portrait one, or the usual one cropped if there isn't one)."""
+    meta = views(v["views"]) if "views" in v.keys() else ""
+    return (f'<a class="scard" href="/shorts?v={v["id"]}"><img loading="lazy" src="https://i.ytimg.com/vi/{v["id"]}/oar2.jpg" '
+            f'data-f="{thumb(v["id"])}" onerror="this.onerror=null;this.src=this.dataset.f" alt="">'
+            f'<h3>{e(v["title"] or "")}</h3><div class="meta">{meta}</div></a>')
+
+
+def sub_button(cid, subbed, nxt, vid=None):
+    """Subscribe / Subscribed button for a channel; `nxt` is the page to come back to. `cid` may also be a channel
+    link (a video pasted from outside), with `vid` that video. The page script sends it without reloading the page
+    (so a playing video carries on); the plain form is the fallback."""
     if subbed:
-        return (f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{cid}">'
+        return (f'<form class="js" method="post" action="/subs/remove"><input type="hidden" name="id" value="{e(cid)}">'
                 f'<input type="hidden" name="next" value="{e(nxt)}"><button class="btn ghost small">Subscribed ✓</button></form>')
-    return (f'<form method="post" action="/subs/add"><input type="hidden" name="url" value="{cid}">'
-            f'<input type="hidden" name="next" value="{e(nxt)}"><button class="btn small">Subscribe</button></form>')
+    return (f'<form class="js" method="post" action="/subs/add"><input type="hidden" name="url" value="{e(cid)}">'
+            + (f'<input type="hidden" name="v" value="{vid}">' if vid else "")
+            + f'<input type="hidden" name="next" value="{e(nxt)}"><button class="btn small">Subscribe</button></form>')
+
+
+def later_button(vid, saved):
+    return (f'<form class="js" method="post" action="/later/toggle"><input type="hidden" name="v" value="{vid}">'
+            f'<input type="hidden" name="next" value="/watch?v={vid}">'
+            f'<button class="btn ghost small">{"Saved ✓" if saved else "Watch later"}</button></form>')
 
 
 def side_row(r, seen=False):
@@ -923,27 +1358,82 @@ post("/hide","v="+c.dataset.no);a.style.display="none";a.after(g)}
 else if(c=t.closest("[data-hc]")){var g=c.parentNode;g.hc=c.dataset.hc;post("/hide","c="+g.hc);c.replaceWith("Channel hidden too");
 document.querySelectorAll('.card [data-ch="'+g.hc+'"]').forEach(x=>{x.closest(".card").style.display="none"})}
 else if(c=t.closest("[data-un]")){var g=c.parentNode;post("/hide","undo=1&v="+c.dataset.un+(g.hc?"&c="+g.hc:"")).then(()=>{if(g.hc)location.reload();else{g.card.style.display="";g.remove()}})}
+else if(c=t.closest("[data-rate]")){k.preventDefault();var g=c.parentNode;
+post("/rate","v="+g.dataset.v+"&r="+c.dataset.rate).then(s=>{g.querySelectorAll("[data-rate]").forEach(b=>{b.classList.toggle("on",b.dataset.rate==s);b.setAttribute("aria-pressed",b.dataset.rate==s)})})}
 else if(c=t.closest("[data-ch]")){k.preventDefault();location.href="/channel?id="+c.dataset.ch}});
-var t=document.querySelector("nav .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script>"""
+// Subscribe / Watch later buttons (form class="js") change in place, so a playing video isn't interrupted.
+addEventListener("submit",k=>{var f=k.target;if(!f.classList.contains("js"))return;k.preventDefault();
+var b=new URLSearchParams(new FormData(f)),had=f.contains(document.activeElement);b.set("inline","1");f.querySelector("button").disabled=true;
+fetch(f.action,{method:"POST",body:b}).then(r=>r.ok?r.text():Promise.reject()).then(h=>{var d=document.createElement("div");
+d.innerHTML=h;var n=d.firstChild;f.replaceWith(n);if(had)n.querySelector("button").focus()}).catch(()=>{f.classList.remove("js");f.submit()})});
+var t=document.querySelector(".rib .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script>"""
+
+# Home only: note which cards were on screen for a second (sent in batches), and when you come back to Home with
+# the browser's Back button, load it fresh so it shows what you've just watched.
+HOME_JS = """<script>(function(){var q={},sent={};
+function flush(){var v=Object.keys(q);if(!v.length)return;var b="v="+v.join(",")+"&s="+v.map(function(k){return q[k]}).join(",");q={};
+try{navigator.sendBeacon("/impr",new URLSearchParams(b))}catch(x){fetch("/impr",{method:"POST",body:b,keepalive:true,headers:{"Content-Type":"application/x-www-form-urlencoded"}})}}
+if(window.IntersectionObserver){var io=new IntersectionObserver(function(es){es.forEach(function(e){var a=e.target;
+if(e.isIntersecting)a._t=setTimeout(function(){if(!sent[a.dataset.v]){sent[a.dataset.v]=1;q[a.dataset.v]=a.dataset.s}},1000);else clearTimeout(a._t)})},{threshold:.6});
+document.querySelectorAll(".card[data-s]").forEach(function(a){io.observe(a)})}
+setInterval(flush,5000);addEventListener("pagehide",flush);
+addEventListener("pageshow",function(e){if(e.persisted)location.reload()})})()</script>"""
+
+# Navigation icons (24x24, filled with the text colour).
+ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
+    "home": '<path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/>',
+    "shorts": '<path d="M9 2h6a4 4 0 0 1 4 4v12a4 4 0 0 1-4 4H9a4 4 0 0 1-4-4V6a4 4 0 0 1 4-4zm0 2a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h6'
+              'a2 2 0 0 0 2-2V6a2 2 0 0 0-2-2zm1 4.5 5 3.5-5 3.5z"/>',
+    "feed": '<path d="M4 6h16v2H4zm2-4h12v2H6zm-2 8h16a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-8a2 2 0 0 1 2-2zm6 2.7v6.6'
+            'l6-3.3z"/>',
+    "new": '<path d="m19 9 1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5'
+           'L17 12zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25z"/>',
+    "later": '<path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16zm.5-13H11v6l5.2 3.2.8-1.3-4.5-2.7z"/>',
+    "subs": '<path d="M4 6H2v14a2 2 0 0 0 2 2h14v-2H4zm16-4H8a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2zm-8 '
+            '12.5v-9l6 4.5z"/>',
+    "hist": '<path d="M13 3a9 9 0 0 0-9 9H1l3.9 3.9L9 12H6a7 7 0 1 1 2.05 4.95l-1.41 1.41A9 9 0 1 0 13 3zm-1 5v5l4.3 2.5.7-1.2'
+            '-3.5-2.1V8z"/>',
+    "up": '<path d="M1 21h4V9H1zm22-11a2 2 0 0 0-2-2h-6.3l.95-4.57.03-.32a1.5 1.5 0 0 0-.44-1.06L14.17 1 7.6 7.6A2 2 0 0 0 7 9v10'
+          'a2 2 0 0 0 2 2h9a2 2 0 0 0 1.84-1.22l3.02-7.05A2 2 0 0 0 23 12z"/>',
+    "share": '<path d="M14 4v5C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V20l8-8z"/>',
+}.items()}
+# Home, Shorts and Subscriptions are the main three (the bar along the bottom on a phone); the rest sit under them
+# on a computer, or in the ribbon across the top on a phone.
+MAIN_TABS = (("home", "/", "Home"), ("shorts", "/shorts", "Shorts"), ("feed", "/feed", "Subscriptions"))
+MORE_TABS = (("new", "/new", "New to you"), ("later", "/later", "Later"), ("subs", "/subs", "Channels"),
+             ("hist", "/history", "History"))
+
+
+def rate_buttons(vid, val):
+    """Thumbs up / down for a video; the page script sends a click to /rate."""
+    return (f'<div class="rate" data-v="{vid}">' + "".join(
+        f'<button type="button" class="{cls}{" on" if val == n else ""}" data-rate="{n}" aria-pressed="{str(val == n).lower()}" '
+        f'title="{t}" aria-label="{t}">{ICON["up"]}</button>' for n, cls, t in ((1, "up", "I like this"), (-1, "dn", "Not for me")))
+            + '</div>')
 
 
 def layout(title, body, prof=None, tab="", q=""):
     head = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
-            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
             f'<title>{e(title)} · YakTube</title><link rel="icon" type="image/png" href="/favicon.png">'
             f'<link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.json" crossorigin="use-credentials">'
             f'<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
             f'<meta name="apple-mobile-web-app-title" content="YakTube"><style>{CSS}</style></head><body>')
     if not prof:
         return head + f'<main>{body}</main></body></html>'
-    tabs = "".join(f'<a href="{h}" class="{"on" if tab == k else ""}">{n}</a>'
-                   for k, h, n in (("feed", "/", "Feed"), ("fy", "/foryou", "For you"), ("new", "/new", "New to you"), ("shorts", "/shorts", "Shorts"), ("later", "/later", "Later"), ("subs", "/subs", "Subscriptions"), ("hist", "/history", "History")))
+    def links(tabs, icons=True):
+        return "".join(f'<a href="{h}" class="{"on" if tab == k else ""}">{ICON[k] if icons else ""}<span>{n}</span></a>'
+                       for k, h, n in tabs)
+    av = f'<span class="av" style="background:{prof["color"]}">{e(prof["name"][:1].upper())}</span>'
     return head + (
-        f'<header><a class="logo" href="/">Yak<b>Tube</b></a><nav>{tabs}</nav>'
+        f'<header><a class="logo" href="/">Yak<b>Tube</b></a>'
+        f'<nav class="rib">{links(MORE_TABS, False)}<a href="/profiles">{av}<span>Profiles</span></a></nav>'
         f'<form class="go" action="/go"><input type="text" name="q" placeholder="Search, or paste a YouTube link…" '
         f'autocomplete="off" value="{e(q)}"></form>'
         f'<a href="/profiles" title="Switch profile ({e(prof["name"])})" class="av" style="background:{prof["color"]}">'
-        f'{e(prof["name"][:1].upper())}</a></header><main>{body}</main>'
+        f'{e(prof["name"][:1].upper())}</a></header>'
+        f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}</nav><main>{body}</main></div>'
+        f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         + PAGE_JS + '</body></html>')
 
 
@@ -978,10 +1468,10 @@ class App(BaseHTTPRequestHandler):
             return self.db.execute("SELECT * FROM profiles WHERE id=?", (int(ck["yak_profile"].value),)).fetchone()
         return None
 
-    def card(self, v, seen=False, hide=False):
+    def card(self, v, seen=False, hide=False, src=None, why=None):
         if self._later is None:                              # this profile's Watch later list, read once per page
             self._later = {r[0] for r in self.db.execute("SELECT video_id FROM later WHERE profile_id=?", (self.prof["id"],))}
-        return card(v, seen, v["id"] in self._later, hide)
+        return card(v, seen, v["id"] in self._later, hide, src, why)
 
     def back(self, f, fallback=None):
         """After a form: go back to the page it came from (only ever a path on this site)."""
@@ -1020,12 +1510,12 @@ class App(BaseHTTPRequestHandler):
             self.prof = self.profile()
             if not self.prof:
                 return self.redirect("/profiles")
-            h = {("GET", "/"): self.feed, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
+            h = {("GET", "/"): self.home, ("GET", "/feed"): self.feed, ("POST", "/rate"): self.rate, ("POST", "/impr"): self.impr, ("GET", "/watch"): self.watch, ("GET", "/go"): self.go,
                  ("GET", "/subs"): self.subs, ("POST", "/subs/add"): self.sub_add, ("GET", "/channel"): self.channel,
                  ("POST", "/subs/import"): self.sub_import, ("GET", "/subs/export"): self.sub_export,
                  ("GET", "/later"): self.later, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
-                 ("GET", "/foryou"): self.foryou, ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
+                 ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
@@ -1090,20 +1580,65 @@ class App(BaseHTTPRequestHandler):
                 f'aria-checked="{"true" if on else "false"}" title="Show Shorts from your subscriptions">Shorts<i></i></button></form>'
                 f'<form method="post" action="/refresh"><button class="btn ghost small">Refresh</button></form></div></div>'
                 f'<div class="grid">{grid or "<p class=meta>Fetching videos… refresh in a moment.</p>"}</div>'
-                + (f'<p class="center" style="margin-top:30px"><a class="btn ghost" href="/?page={page + 1}">Load more</a></p>' if more else ""))
-        self.send(layout("Feed", body, self.prof, "feed"))
+                + (f'<p class="center" style="margin-top:30px"><a class="btn ghost" href="/feed?page={page + 1}">Load more</a></p>' if more else ""))
+        self.send(layout("Subscriptions", body, self.prof, "feed"))
 
-    def foryou(self):
-        threading.Thread(target=warm_related, args=(self.prof["id"],), daemon=True).start()
-        rows = for_you(self.db, self.prof["id"])
-        if not rows:
+    def home(self):
+        """Home: the recommendation engine's picks (see home_feed), with a group of 4 Shorts every few rows.
+        ?why=1 shows why each one is there. Never cached: coming back to it shows the picks as they are now."""
+        pid = self.prof["id"]
+        threading.Thread(target=warm_related, args=(pid,), daemon=True).start()
+        picks = home_feed(self.db, pid)
+        shorts = home_shorts(self.db, pid)
+        show_why = self.q.get("why") == "1"
+
+        def shelf():
+            got, shorts[:] = shorts[:4], shorts[4:]
+            return (f'<section class="shelf"><h2>{ICON["shorts"]}Shorts</h2><div class="sgrid">'
+                    + "".join(short_card(v) for v in got) + '</div></section>')
+        parts = []
+        for i, (r, src, score, reason) in enumerate(picks):
+            if i in (8, 20, 32, 44) and shorts:   # groups of 4, spread through the feed
+                parts.append(shelf())
+            parts.append(self.card(r, hide=True, src=src, why=f"{reason} · {score:.2f}" if show_why else None))
+        if shorts and len(picks) <= 8:
+            parts.append(shelf())
+        if not picks:
             body = ('<div class="empty"><h1>Nothing here yet</h1><p>Watch a few videos (search for something you like) '
-                    'and suggestions based on what you watch will show up here. It\'s all worked out on this '
-                    'computer from your own history.</p><a class="btn" href="/">Back to your feed</a></div>')
+                    'or subscribe to some channels, and suggestions based on what you watch will show up here. It\'s all '
+                    'worked out on this computer from your own history.</p><a class="btn" href="/subs">Add subscriptions</a></div>')
+            body += f'<div class="grid">{"".join(parts)}</div>' if parts else ""
         else:
-            body = (f'<div class="bar"><h1>For you</h1><span class="meta">Based on what you\'ve watched</span></div>'
-                    f'<div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
-        self.send(layout("For you", body, self.prof, "fy"))
+            body = f'<h1 class="sr">Home</h1><div class="grid">{"".join(parts)}</div>' + HOME_JS
+        self.send(layout("Home", body, self.prof, "home"), headers=[("Cache-Control", "no-store")])
+
+    def impr(self):
+        """Home reports the videos that were really on screen (a second or more); passed-over ones sink next time,
+        and each source's hit rate is learned from them. A new visit (30+ minutes later) counts again."""
+        f, pid, now = self.form(), self.prof["id"], int(time.time())
+        rows = [(pid, v, s, now, now) for v, s in zip(f.get("v", "").split(","), f.get("s", "").split(","))
+                if VID_RE.match(v) and s in SOURCES][:100]
+        self.db.executemany(
+            "INSERT INTO impressions(profile_id,video_id,src,first_at,last_at,n) VALUES(?,?,?,?,?,1) ON CONFLICT DO UPDATE "
+            "SET n=n+(last_at<excluded.last_at-1800), last_at=excluded.last_at", rows)
+        self.send("", 204)
+
+    def rate(self):
+        """Thumbs up (r=1) or down (r=-1); the same again takes it back. Answers with the video's rating now."""
+        f, pid = self.form(), self.prof["id"]
+        vid, r = f.get("v", ""), f.get("r", "")
+        if not VID_RE.match(vid) or r not in ("1", "-1"):
+            return self.send("", 400)
+        val = int(r)
+        if self.db.execute("DELETE FROM ratings WHERE profile_id=? AND video_id=? AND val=?", (pid, vid, val)).rowcount:
+            val = 0
+        else:
+            ensure_video(self.db, vid)
+            self.db.execute("INSERT OR REPLACE INTO ratings(profile_id,video_id,val,at) VALUES(?,?,?,?)",
+                            (pid, vid, val, int(time.time())))
+            if val > 0:                                       # its "up next" list feeds Home ("Because you liked")
+                threading.Thread(target=warm_one, args=(vid,), daemon=True).start()
+        self.send(str(val), ctype="text/plain")
 
     def newtoyou(self):
         threading.Thread(target=warm_related, args=(self.prof["id"],), daemon=True).start()
@@ -1114,20 +1649,29 @@ class App(BaseHTTPRequestHandler):
                     'channels you haven\'t tried, reached through the ones you like.</p>'
                     '<a class="btn" href="/">Back to your feed</a></div>')
         else:
+            self.db.executemany("INSERT OR IGNORE INTO shown(profile_id,video_id,first_at) VALUES(?,?,?)",
+                                [(self.prof["id"], r["id"], int(time.time())) for r in rows])
             body = (f'<div class="bar"><h1>New to you</h1><span class="meta">Channels you haven\'t watched yet · '
-                    f'grows as you explore</span></div><div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
+                    f'new picks through the day</span></div><div class="grid">{"".join(self.card(r, hide=True) for r in rows)}</div>')
         self.send(layout("New to you", body, self.prof, "new"))
 
     def shorts(self):
         first = self.q.get("v", "")
         rows = shorts_for(self.db, self.prof["id"], first if VID_RE.match(first) else None)
+        mine = dict(self.db.execute("SELECT video_id, val FROM ratings WHERE profile_id=?", (self.prof["id"],)).fetchall())
+        for r in rows:
+            r["r"] = mine.get(r["id"], 0)
         data = json.dumps(rows).replace("</", "<\\/")
         empty = ('' if rows else '<div class="empty"><h1>No Shorts right now</h1><p>Shorts from all over YouTube show up here. '
                  'A new batch arrives every hour (and a few minutes after a restart).</p></div>')
         body = (SHORTS_CSS + '<div id="sh"><div id="pl"></div><div id="tap"></div>'
                 '<a id="x" href="/" aria-label="Close Shorts">✕</a>' + empty +
                 '<div id="info"><b id="ti"></b><span id="ch"></span></div><div id="snd" hidden>🔇 Tap for sound</div>'
-                '<div id="pz" hidden>▶</div><div id="ud"><button id="up" aria-label="Previous">▲</button>'
+                f'<div id="pz" hidden>▶</div><div id="rt"><button id="ru" aria-label="I like this">{ICON["up"]}</button>'
+                f'<button id="rd" aria-label="Not for me">{ICON["up"]}</button>'
+                f'<button id="sr" aria-label="Share">{ICON["share"]}</button></div>'
+                '<div id="pb" role="slider" aria-label="Seek"><i><b></b></i></div><div id="tm" hidden></div>'
+                '<div id="toast" hidden></div><div id="ud"><button id="up" aria-label="Previous">▲</button>'
                 '<button id="dn" aria-label="Next">▼</button></div></div>'
                 + YT_JS + SHORTS_JS.replace("__LIST__", data).replace("__EMBED__", EMBED))
         self.send(layout("Shorts", body))
@@ -1142,8 +1686,10 @@ class App(BaseHTTPRequestHandler):
             if f.get("n", "1") != "0":
                 ensure_video(self.db, vid)
                 mark_watched(self.db, pid, vid)
+                threading.Thread(target=after_watch, args=(pid, vid), daemon=True).start()   # Home follows at once
             done = d > 0 and t >= d - max(10, d // 20)
-            self.db.execute("UPDATE history SET pos=? WHERE profile_id=? AND video_id=?", (0 if done or t < 5 else t, pid, vid))
+            self.db.execute("UPDATE history SET pos=?, best=MAX(COALESCE(best,0),?), dur=CASE WHEN ?>0 THEN ? ELSE dur END "
+                            "WHERE profile_id=? AND video_id=?", (0 if done or t < 5 else t, t, d, d, pid, vid))
             if done:
                 self.db.execute("DELETE FROM later WHERE profile_id=? AND video_id=?", (pid, vid))
         self.send("", 204)
@@ -1169,12 +1715,14 @@ class App(BaseHTTPRequestHandler):
             ensure_video(self.db, vid)
             self.db.execute("INSERT INTO later(profile_id,video_id,added_at) VALUES(?,?,?)", (pid, vid, int(time.time())))
             on = 1
+        if f.get("inline"):
+            return self.send(later_button(vid, on) if VID_RE.match(vid) else "", 200 if VID_RE.match(vid) else 400)
         if f.get("next"):
             return self.back(f, "/later")
         self.send(str(on), ctype="text/plain")              # the + on a video card asks for the new state
 
     def hide(self):
-        """Not interested: v = a video, c = a whole channel; undo=1 takes it back. Only affects For you / New to you."""
+        """Not interested: v = a video, c = a whole channel; undo=1 takes it back. Only affects Home / New to you."""
         f, pid = self.form(), self.prof["id"]
         for kind, ref, ok in (("v", f.get("v", ""), VID_RE), ("c", f.get("c", ""), CID_RE)):
             if ok.fullmatch(ref):
@@ -1187,11 +1735,11 @@ class App(BaseHTTPRequestHandler):
 
     def feed_shorts(self):
         self.db.execute("UPDATE profiles SET feed_shorts=1-COALESCE(feed_shorts,1) WHERE id=?", (self.prof["id"],))
-        self.redirect("/")
+        self.redirect("/feed")
 
     def refresh(self):
         refresh_stale(force=True)
-        self.redirect("/")
+        self.redirect("/feed")
 
     # -- watch
     def go(self):
@@ -1211,6 +1759,7 @@ class App(BaseHTTPRequestHandler):
         chans = pool.submit(search_channels, q)              # looked up while the videos load
         try:
             vids = search(self.db, q)
+            save_search(self.db, self.prof["id"], q, vids)    # Home draws on what you search for
             err = ""
         except Exception as ex:
             print("[search]", repr(ex))
@@ -1255,19 +1804,13 @@ class App(BaseHTTPRequestHandler):
         at = self.db.execute("SELECT pos FROM history WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
         t0 = str(at["pos"] or 0) if at else "0"              # pick up where this profile left off
         saved = self.db.execute("SELECT 1 FROM later WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
-        sub_later = (f'<form method="post" action="/later/toggle"><input type="hidden" name="v" value="{vid}">'
-                     f'<input type="hidden" name="next" value="/watch?v={vid}">'
-                     f'<button class="btn ghost small">{"Saved ✓" if saved else "Watch later"}</button></form>')
+        mine = self.db.execute("SELECT val FROM ratings WHERE profile_id=? AND video_id=?", (pid, vid)).fetchone()
+        sub_later = later_button(vid, saved)
         subbed = v["channel_id"] and self.db.execute(
             "SELECT 1 FROM subs WHERE profile_id=? AND channel_id=?", (pid, v["channel_id"])).fetchone()
         nxt = e("/watch?v=" + vid)
-        if subbed:
-            sub = (f'<form method="post" action="/subs/remove"><input type="hidden" name="id" value="{v["channel_id"]}">'
-                   f'<input type="hidden" name="next" value="{nxt}"><button class="btn ghost small">Subscribed ✓</button></form>')
-        elif v["channel_id"] or v["channel_url"]:
-            sub = (f'<form method="post" action="/subs/add"><input type="hidden" name="url" value="{e(v["channel_id"] or v["channel_url"])}">'
-                   f'<input type="hidden" name="v" value="{vid}"><input type="hidden" name="next" value="{nxt}">'
-                   f'<button class="btn small">Subscribe</button></form>')
+        if subbed or v["channel_id"] or v["channel_url"]:
+            sub = sub_button(v["channel_id"] or v["channel_url"], subbed, "/watch?v=" + vid, vid)
         else:
             sub = ""
         side = ""
@@ -1285,7 +1828,7 @@ class App(BaseHTTPRequestHandler):
             player = WEB_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
         body = (f'<div class="watch"><div>{player}'
                 f'<h1>{e(v["title"] or "Video")}</h1>'
-                f'<div class="bar">{chan}{sub}{sub_later}'
+                f'<div class="bar">{chan}{sub}{rate_buttons(vid, mine[0] if mine else 0)}{sub_later}'
                 f'<span class="meta" style="margin-left:auto">{meta}</span>'
                 f'<a class="meta" href="https://www.youtube.com/watch?v={vid}" target="_blank" rel="noopener">Open on YouTube ↗</a></div></div>'
                 f'<aside><h3 style="margin-top:0">Up next</h3><div id="upnext"><p class="meta">Loading…</p></div>'
@@ -1337,7 +1880,7 @@ class App(BaseHTTPRequestHandler):
                   f'<button class="btn">Subscribe</button></form>' + port
                 + (f'<div class="list">{items}</div>' if rows else '<p class="meta">No subscriptions yet.</p>')
                 + (f'<h3 style="margin:28px 0 12px">Hidden from suggestions</h3><div class="list">{hidden}</div>' if hidden else ""))
-        self.send(layout("Subscriptions", body, self.prof, "subs"))
+        self.send(layout("Channels", body, self.prof, "subs"))
 
     def channel(self):
         """One channel's videos, newest first, whether or not you're subscribed."""
@@ -1370,7 +1913,7 @@ class App(BaseHTTPRequestHandler):
         off = self.db.execute("SELECT 1 FROM hidden WHERE profile_id=? AND kind='c' AND ref=?", (pid, cid)).fetchone()
         sub += (f'<form method="post" action="/hide"><input type="hidden" name="c" value="{cid}">'
                 f'<input type="hidden" name="next" value="{nxt}">{"<input type=hidden name=undo value=1>" if off else ""}'
-                f'<button class="btn ghost small" title="Keeps this channel out of For you and New to you">'
+                f'<button class="btn ghost small" title="Keeps this channel out of Home and New to you">'
                 f'{"Hidden from suggestions ✓" if off else "Hide from suggestions"}</button></form>')
         more = len(rows) > PAGE_SIZE
         grid = "".join(self.card(v, v["seen"]) for v in rows[:PAGE_SIZE])
@@ -1387,12 +1930,16 @@ class App(BaseHTTPRequestHandler):
             cid = resolve_channel(f.get("url", ""))
             refresh_channel(self.db, cid)
         except Exception as ex:
+            if f.get("inline"):
+                return self.send(f"Couldn't subscribe: {ex}", 400, ctype="text/plain")
             return self.subs(err=f"Couldn't subscribe: {ex}")
         self.db.execute("INSERT OR IGNORE INTO subs(profile_id,channel_id,added_at) VALUES(?,?,?)",
                         (self.prof["id"], cid, int(time.time())))
         if VID_RE.match(f.get("v", "")):
             self.db.execute("UPDATE videos SET channel_id=? WHERE id=? AND channel_id IS NULL", (cid, f["v"]))
         nxt = f.get("next", "")
+        if f.get("inline"):                                  # the page script: answer with the new button
+            return self.send(sub_button(cid, True, nxt))
         self.redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else "/subs")
 
     def sub_import(self):
@@ -1428,6 +1975,8 @@ class App(BaseHTTPRequestHandler):
         f = self.form()
         self.db.execute("DELETE FROM subs WHERE profile_id=? AND channel_id=?", (self.prof["id"], f.get("id", "")))
         nxt = f.get("next", "")
+        if f.get("inline"):
+            return self.send(sub_button(f.get("id", ""), False, nxt))
         self.redirect(nxt if nxt.startswith("/") and not nxt.startswith("//") else "/subs")
 
     # -- history

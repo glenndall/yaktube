@@ -82,11 +82,11 @@ class T(unittest.TestCase):
         s, url, _ = self.get(op, "/")
         self.assertTrue(url.endswith("/profiles"))                    # no profile -> picker
         a = self.login("Alice")
-        s, url, page = self.get(a, "/")
+        s, url, page = self.get(a, "/feed")
         self.assertIn("Your feed is empty", page)
         s, url, page = self.get(a, "/subs/add", {"url": "@woz"})      # subscribe by handle
         self.assertIn("Woz &amp; Friends", page)
-        s, url, page = self.get(a, "/")
+        s, url, page = self.get(a, "/feed")
         self.assertIn("Video 4 &lt;b&gt;", page)                      # escaped, newest first
         self.assertLess(page.index("Video 4"), page.index("Video 1"))
         self.assertIn('href="/shorts?v=vid00000003"', page)           # subs' Shorts are on by default
@@ -100,11 +100,11 @@ class T(unittest.TestCase):
         self.assertIn("youtube-nocookie.com/embed/vid00000002", page)
         self.assertIn("Subscribed ✓", page)
         self.assertIn("More from this channel", page)
-        _, _, page = self.get(a, "/")
+        _, _, page = self.get(a, "/feed")
         self.assertNotIn('card seen"', page)                          # opening a video isn't watching it
         self.assertIn("Nothing watched yet", self.get(a, "/history")[2])
         self.play(a, "vid00000002"); self.play(a, "vid00000002")
-        _, _, page = self.get(a, "/")
+        _, _, page = self.get(a, "/feed")
         self.assertIn('card seen" href="/watch?v=vid00000002', page)  # watched videos dimmed
         _, _, page = self.get(a, "/history")
         self.assertEqual(page.count("vid00000002/mqdefault"), 1)     # deduped
@@ -115,7 +115,7 @@ class T(unittest.TestCase):
         self.assertIn("Subscribe</button>", page)
         # profiles are isolated
         b = self.login("Kid")
-        self.assertIn("Your feed is empty", self.get(b, "/")[2])
+        self.assertIn("Your feed is empty", self.get(b, "/feed")[2])
         self.assertIn("Nothing watched yet", self.get(b, "/history")[2])
         # unsubscribe + history clear
         self.get(a, "/subs/remove", {"id": app.CID_RE.search(CID).group(0)})
@@ -124,6 +124,140 @@ class T(unittest.TestCase):
         self.assertNotIn("Outside vid", self.get(a, "/history")[2])
         self.get(a, "/history/clear", {})
         self.assertIn("Nothing watched yet", self.get(a, "/history")[2])
+
+    def test_16_home_layout(self):
+        a = self.login("Homey")
+        self.get(a, "/subs/add", {"url": "@woz"})
+        c = app.connect()
+        now = int(time.time())
+        app.store_videos(c, [{"id": f"hsh{i:08d}", "title": f"Home short {i}", "channel_id": CID, "published": now - i, "short": 1}
+                             for i in range(6)])
+        app.store_videos(c, [{"id": f"hvd{i:08d}", "title": f"Home vid {i}", "channel_id": CID, "published": now - 100 - i}
+                             for i in range(20)])
+        app.OUTSIDE[:] = []
+        _, url, page = self.get(a, "/")
+        self.assertIn('href="/" class="on"', page)                    # Home is the start page
+        self.assertEqual(page.count('class="scard"'), 4 * page.count('class="shelf"'))   # Shorts come in groups of 4...
+        self.assertEqual(page.count('class="shelf"'), 2)               # (24 videos: after the 8th and the 20th)
+        self.assertEqual(page[:page.index('class="shelf"')].count('<a class="card'), 8)   # ...after the first 8 videos
+        self.assertIn('/oar2.jpg', page)
+        for nav in ('class="side"', 'class="rib"', 'class="bot"'):    # sidebar (computer), ribbon + bottom bar (phone)
+            self.assertIn(nav, page)
+        self.assertIn('href="/feed" class=""><svg', page)
+        self.assertIn('<span>Profiles</span>', page)
+        self.assertTrue(self.get(a, "/foryou")[1].endswith("/"))       # old For you link lands on Home
+        self.assertIn('href="/feed" class="on"', self.get(a, "/feed")[2])
+        # thumbs up / down: a click sets it, the same again clears it, the other one swaps it
+        post = lambda body: a.open(self.base + "/rate", body.encode()).read().decode()
+        self.assertIn('data-rate="1" aria-pressed="false"', self.get(a, "/watch?v=hvd00000001")[2])
+        self.assertEqual(post("v=hvd00000001&r=1"), "1")
+        self.assertIn('class="up on" data-rate="1"', self.get(a, "/watch?v=hvd00000001")[2])
+        self.assertEqual(post("v=hvd00000001&r=-1"), "-1")
+        self.assertEqual(post("v=hvd00000001&r=-1"), "0")
+        self.assertEqual(post("v=hsh00000000&r=-1"), "-1")             # a thumbed-down Short leaves the shelves
+        self.assertNotIn("hsh00000000", self.get(a, "/")[2])
+        with self.assertRaises(urllib.error.HTTPError):
+            post("v=bad&r=1")
+        pid = c.execute("SELECT id FROM profiles WHERE name='Homey'").fetchone()[0]
+        self.assertEqual(c.execute("SELECT val FROM ratings WHERE profile_id=?", (pid,)).fetchall()[0][0], -1)
+        app.OUTSIDE[:] = ["hsh00000001"]
+        page = self.get(a, "/shorts")[2]
+        self.assertIn('"r": 0', page)                                  # the Shorts player knows each one's rating
+        self.assertIn('id="pb" role="slider"', page)                   # progress bar you can drag
+        self.assertIn('id="sr" aria-label="Share"', page)
+        self.assertIn('"https://youtube.com/shorts/"+it.id', page)     # shares the YouTube link
+        app.OUTSIDE[:] = []
+        c.close()
+
+    def test_17_engine(self):
+        a = self.login("Eng")
+        db = app.connect()
+        pid = db.execute("SELECT id FROM profiles WHERE name='Eng'").fetchone()[0]
+        now = int(time.time())
+        post = lambda path, body: a.open(self.base + path, body.encode()).read().decode()
+        vids = lambda pre, n, ch: [(f"{pre}{i:08d}", "UC" + ch * 22, f"{pre} topic{i} title") for i in range(n)]
+        # two watched videos, each with its own "up next" list from its own channels
+        for src, pre in (("engwatchA01", "ea0"), ("engwatchB01", "eb0")):
+            db.execute("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES(?,?,?)", (src, "UCw" + "0" * 21, src))
+            rows = [(f"{pre}{i:08d}", "UC" + pre[1] * 4 + str(i) * 18, f"{pre} clip {i}") for i in range(6)]
+            db.executemany("INSERT OR REPLACE INTO videos(id,channel_id,title) VALUES(?,?,?)", rows)
+            db.executemany("INSERT OR REPLACE INTO related(src,video_id,pos) VALUES(?,?,?)", [(src, r[0], i) for i, r in enumerate(rows)])
+            db.execute("INSERT OR REPLACE INTO related_src VALUES(?,?)", (src, now))
+        db.execute("INSERT INTO history(profile_id,video_id,watched_at,best,dur) VALUES(?,?,?,?,?)", (pid, "engwatchA01", now - 3 * 86400, 500, 600))
+        top = lambda: [r["id"] for r, *_ in app.home_feed(db, pid)][:3]
+        self.assertTrue(all(v.startswith("ea0") for v in top()))
+        # Home follows what you just watched: after B, B's "up next" leads
+        db.execute("INSERT INTO history(profile_id,video_id,watched_at,best,dur) VALUES(?,?,?,?,?)", (pid, "engwatchB01", now - 60, 590, 600))
+        self.assertTrue(all(v.startswith("eb0") for v in top()))
+        page = self.get(a, "/?why=1")[2]
+        self.assertIn("Because you watched: engwatchB01", page)
+        self.assertIn('data-s="watch"', page)
+        self.assertIn("sendBeacon", page)                              # reports what was on screen
+        self.assertEqual(a.open(self.base + "/").headers["Cache-Control"], "no-store")   # Back shows a fresh Home
+        # passed over on several visits -> sinks
+        first = top()[0]
+        post("/impr", f"v={first}&s=watch")
+        for _ in range(3):
+            db.execute("UPDATE impressions SET last_at=last_at-3600 WHERE profile_id=?", (pid,))
+            post("/impr", f"v={first}&s=watch")
+        self.assertEqual(db.execute("SELECT n FROM impressions WHERE profile_id=? AND video_id=?", (pid, first)).fetchone()[0], 4)
+        self.assertNotIn(first, top())
+        post("/impr", "v=bad,eb000000001&s=watch,nonsense")            # junk is ignored
+        # thumbs down on B: its "up next" stops counting, and B's channel sinks
+        post("/rate", "v=engwatchB01&r=-1")
+        self.assertTrue(all(v.startswith("ea0") for v in top()))
+        post("/rate", "v=engwatchB01&r=-1")                            # (take it back)
+        # a search you made becomes a source; YakTube re-runs it and its own topic searches in the background
+        self.get(a, "/search?q=Apple%20%20II")
+        self.assertEqual(db.execute("SELECT q, n FROM searches WHERE profile_id=?", (pid,)).fetchall()[0][:], ("apple ii", 1))
+        self.assertIn("From your search: “apple ii”", self.get(a, "/?why=1")[2])
+        db.execute("UPDATE related_src SET fetched_at=0 WHERE src IN ('q:apple ii','engwatchA01')")
+        ran, real = [], (app.search, app.fetch_related, app.refresh_channel)
+        app.search = lambda c, q: ran.append(q) or []
+        app.fetch_related = lambda c, vid, max_age=0: ran.append(vid)
+        app.refresh_channel = lambda c, cid, deep=False: ran.append(cid)
+        try:
+            db.execute("INSERT INTO ratings VALUES(?, 'engwatchA01', 1, ?)", (pid, now))
+            db.execute("INSERT OR IGNORE INTO channels(id,title) VALUES(?, 'W')", ("UCw" + "0" * 21,))
+            db.execute("INSERT INTO subs(profile_id,channel_id) VALUES(?,?)", (pid, "UCw" + "0" * 21))
+            app.discover_more(db, pid)
+        finally:
+            app.search, app.fetch_related, app.refresh_channel = real
+        self.assertIn("engwatchA01", ran)                              # thumbed up: its list refreshed
+        self.assertIn("apple ii", ran)                                 # your search, re-run
+        self.assertIn("UCw" + "0" * 21, ran)                           # a favourite subscription, read in depth
+        auto = [q for (q,) in db.execute("SELECT q FROM searches WHERE profile_id=? AND auto=1", (pid,))]
+        self.assertTrue(auto and all(q in ran for q in auto))          # and topic searches of its own
+        # what you watch teaches it which sources work: watched picks raise their source's weight
+        db.executemany("INSERT OR REPLACE INTO impressions(profile_id,video_id,src,first_at,last_at,n) VALUES(?,?,'search',?,?,1)",
+                       [(pid, f"wgt{i:08d}", now - 100, now - 100) for i in range(30)])
+        db.executemany("INSERT OR REPLACE INTO history(profile_id,video_id,watched_at) VALUES(?,?,?)",
+                       [(pid, f"wgt{i:08d}", now) for i in range(15)])
+        import random
+        w = app.source_weights(db, pid, now, random.Random(1))
+        self.assertGreater(w["search"], 1.4 * w["topic"])
+        # how much of a video was watched is kept
+        self.play(a, "engwatchA01", t=300, d=600)
+        self.assertEqual(tuple(db.execute("SELECT best, dur FROM history WHERE profile_id=? AND video_id='engwatchA01'", (pid,)).fetchone()), (500, 600))
+        db.close()
+
+    def test_18_inline_buttons(self):
+        a = self.login("Inline")
+        post = lambda path, body: a.open(self.base + path, body.encode()).read().decode()
+        page = self.get(a, "/watch?v=vid00000002")[2]
+        self.assertIn('<form class="js" method="post" action="/subs/add">', page)   # sent by the page script, no reload
+        self.assertIn('<form class="js" method="post" action="/later/toggle">', page)
+        self.assertIn('addEventListener("submit"', page)
+        out = post("/subs/add", f"url={CID}&v=vid00000002&next=/watch?v=vid00000002&inline=1")
+        self.assertTrue(out.startswith('<form class="js" method="post" action="/subs/remove">') and "Subscribed ✓" in out)
+        self.assertIn("Subscribed ✓", self.get(a, "/watch?v=vid00000002")[2])
+        self.assertIn(">Subscribe</button>", post("/subs/remove", f"id={CID}&next=/x&inline=1"))
+        self.assertIn("Saved ✓", post("/later/toggle", "v=vid00000002&next=/watch?v=vid00000002&inline=1"))
+        self.assertIn(">Watch later</button>", post("/later/toggle", "v=vid00000002&next=/watch?v=vid00000002&inline=1"))
+        with self.assertRaises(urllib.error.HTTPError):               # a failure falls back to the normal form
+            post("/subs/add", "url=nonsense-channel&inline=1")
+        _, url, _ = self.get(a, "/later/toggle", {"v": "vid00000002", "next": "/watch?v=vid00000002"})   # without the script: as before
+        self.assertTrue(url.endswith("/watch?v=vid00000002"))
 
     def test_2_bad_input(self):
         a = self.login("Tester")
@@ -149,7 +283,7 @@ class T(unittest.TestCase):
         # subscribing still works when the channel's RSS feed is down (falls back to the /videos page)
         _, _, page = self.get(a, "/subs/add", {"url": CID2})
         self.assertIn("Retro &amp; Co", page)
-        _, _, page = self.get(a, "/")
+        _, _, page = self.get(a, "/feed")
         self.assertLess(page.index("Newest retro"), page.index("Older retro"))
         self.assertIn("1 day ago", page)
         # search box: words -> search, links -> watch, @handle -> subscribe
@@ -188,13 +322,13 @@ class T(unittest.TestCase):
         self.assertIn("Back catalogue", page)                          # from the channel's videos page
         self.assertIn("4 days ago", page)                              # the feed's exact date wins over "3d ago"
         self.assertNotIn("Your feed is empty", page)
-        self.assertIn("Your feed is empty", self.get(a, "/")[2])        # looking doesn't subscribe
+        self.assertIn("Your feed is empty", self.get(a, "/feed")[2])        # looking doesn't subscribe
         # subscribe from the channel page: comes back to it, now subscribed
         s, url, page = self.get(a, "/subs/add", {"url": CID, "next": "/channel?id=" + CID})
         self.assertIn("/channel?id=" + CID, url)
         self.assertIn("Subscribed ✓", page)
         # cards, the watch page and the subscriptions list all lead here
-        self.assertIn(f'data-ch="{CID}"', self.get(a, "/")[2])
+        self.assertIn(f'data-ch="{CID}"', self.get(a, "/feed")[2])
         self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/watch?v=vid00000002")[2])
         self.assertIn(f'href="/channel?id={CID}"', self.get(a, "/subs")[2])
         self.play(a, "vid00000002")
@@ -236,9 +370,9 @@ class T(unittest.TestCase):
         # watch later: + on a card (asks for the new state), the button under a video, the Later page
         self.assertIn("Nothing saved yet", self.get(a, "/later")[2])
         self.get(a, "/subs/add", {"url": CID})
-        self.assertIn('class="lt" data-lt="vid00000004"', self.get(a, "/")[2])
+        self.assertIn('class="lt" data-lt="vid00000004"', self.get(a, "/feed")[2])
         self.assertEqual(post("/later/toggle", "v=vid00000004"), "1")
-        self.assertIn('class="lt on" data-lt="vid00000004"', self.get(a, "/")[2])
+        self.assertIn('class="lt on" data-lt="vid00000004"', self.get(a, "/feed")[2])
         _, url, page = self.get(a, "/later/toggle", {"v": "vid00000002", "next": "/watch?v=vid00000002"})
         self.assertIn("/watch?v=vid00000002", url)
         self.assertIn("Saved ✓", page)
@@ -313,7 +447,14 @@ class T(unittest.TestCase):
                        [(f"cap0000000{i}", CID2, f"Cap {i}") for i in range(2, 7)])
         db.executemany("INSERT OR REPLACE INTO related(src,video_id,pos) VALUES('srch0000001',?,?)",
                        [(f"cap0000000{i}", 10 + i) for i in range(2, 7)])
-        self.assertLessEqual(self.get(a, "/foryou")[2].count("Retro") + self.get(a, "/foryou")[2].count("Cap "), 3)
+        db.executemany("INSERT OR IGNORE INTO videos(id,channel_id,title) VALUES(?,?,?)",     # + 3 from other channels
+                       [(f"oth0000000{i}", "UC" + str(i) * 22, f"Other {i}") for i in range(3)])
+        db.executemany("INSERT OR REPLACE INTO related(src,video_id,pos) VALUES('srch0000001',?,?)",
+                       [(f"oth0000000{i}", 30 + i) for i in range(3)])
+        pid = db.execute("SELECT id FROM profiles WHERE name='FY'").fetchone()[0]
+        chans = [r["channel_id"] for r, *_ in app.home_feed(db, pid)]
+        self.assertEqual(chans[:2], [CID2, CID2])                     # the strongest channel: 2 near the top...
+        self.assertTrue(all(ch != CID2 for ch in chans[2:5]))         # ...then the others before any more of it
         self.assertIn("Nothing here yet", self.get(self.login("Fresh"), "/foryou")[2])   # per profile
 
     def test_8_new_to_you(self):
@@ -343,6 +484,25 @@ class T(unittest.TestCase):
         self.assertNotIn("More from known", page)                     # not new: you've watched that channel
         self.assertNotIn("A short", page)
         self.assertLess(page.index("Fresh A"), page.index("Two hops away"))
+        # shown and passed over for 9 days -> that channel sinks below fresher picks
+        pid = db.execute("SELECT id FROM profiles WHERE name='NTY'").fetchone()[0]
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM shown WHERE profile_id=?", (pid,)).fetchone()[0], 2)
+        db.execute("UPDATE shown SET first_at=? WHERE video_id='ntynew00001'", (int(time.time()) - 9 * 86400,))
+        _, _, page = self.get(a, "/new")
+        self.assertLess(page.index("Two hops away"), page.index("Fresh "))
+        # the scheduled look-around fetches lists nobody opened: the watch's own, then the picks' (one step out)
+        db.execute("DELETE FROM related_src WHERE src IN ('ntyseen0001','ntyhop20001')")
+        calls = []
+        real = app.fetch_related
+        app.fetch_related = lambda c, vid, max_age=86400: calls.append(vid)
+        try:
+            self.assertEqual(app.discover(db, pid), 2)
+        finally:
+            app.fetch_related = real
+        self.assertEqual(calls, ["ntyseen0001", "ntyhop20001"])
+        db.execute("INSERT INTO shown(profile_id,video_id,first_at) VALUES(?, 'ntyold00001', ?)", (pid, int(time.time()) - 40 * 86400))
+        app.tidy(db)
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM shown WHERE video_id='ntyold00001'").fetchone()[0], 0)
         self.assertIn('href="/new" class="on"', page)
         self.get(a, "/subs/add", {"url": C2})                         # subscribing makes it no longer new
         self.assertNotIn("Fresh A", self.get(a, "/new")[2])
@@ -360,7 +520,7 @@ class T(unittest.TestCase):
         a = self.login("Speed")
         self.get(a, "/subs/add", {"url": "@woz"})
         t = time.perf_counter()
-        for _ in range(50): self.get(a, "/")
+        for _ in range(50): self.get(a, "/feed")
         ms = (time.perf_counter() - t) / 50 * 1000
         print(f"\n  feed page avg: {ms:.1f} ms")
         self.assertLess(ms, 50)
@@ -439,10 +599,10 @@ class T(unittest.TestCase):
         s, url, _ = self.get(a, "/go?q=" + urllib.parse.quote("https://youtube.com/shorts/shr00000002"))
         self.assertTrue(url.endswith("/shorts?v=shr00000002"))
         app.OUTSIDE[:] = []
-        self.assertIn('href="/shorts?v=shr00000002"', self.get(a, "/")[2])             # subs' Shorts: in the feed (toggle on)
+        self.assertIn('href="/shorts?v=shr00000002"', self.get(a, "/feed")[2])             # subs' Shorts: in the feed (toggle on)
         self.get(a, "/feed/shorts", {})
-        self.assertNotIn("shr0000000", self.get(a, "/")[2])                            # toggle off: not in the feed
-        self.assertIn('href="/shorts"', self.get(a, "/")[2])                           # the tab
+        self.assertNotIn("shr0000000", self.get(a, "/feed")[2])                            # toggle off: not in the feed
+        self.assertIn('href="/shorts"', self.get(a, "/feed")[2])                           # the tab
 
     def test_12_icons(self):
         op = self.client()                                                              # no profile needed
