@@ -64,6 +64,7 @@ CREATE TABLE IF NOT EXISTS impressions(
 CREATE TABLE IF NOT EXISTS ratings(
   profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   video_id TEXT NOT NULL, val INTEGER NOT NULL, at INTEGER, PRIMARY KEY(profile_id, video_id));
+CREATE TABLE IF NOT EXISTS outside(pos INTEGER PRIMARY KEY, video_id TEXT NOT NULL);
 """
 
 
@@ -287,16 +288,33 @@ def post_json(url, body, timeout=10):
         return json.loads(r.read())
 
 
-OUTSIDE = []      # Shorts YouTube shows a visitor who isn't logged in, newest batch first
+OUTSIDE = []      # Shorts YouTube shows a visitor who isn't logged in, newest batch first (kept in the outside table)
 OUTSIDE_AT = [0]  # when we last asked
+OUTSIDE_LOCK = threading.Lock()   # one batch at a time (the hourly refresh and a player asking for more)
 
 
-def refresh_outside(max_age=3600, pages=5, keep=200):
+def load_outside():
+    """The Shorts list as it was before a restart."""
+    c = connect()
+    try:
+        OUTSIDE[:] = [r[0] for r in c.execute("SELECT video_id FROM outside ORDER BY pos")]
+    finally:
+        c.close()
+
+
+def refresh_outside(max_age=3600, pages=5, keep=600):
+    """Get a new batch of Shorts, unless the last one is less than max_age seconds old. About 40 a time; the newest
+    600 are kept (an hour of Shorts is roughly 60-120)."""
+    with OUTSIDE_LOCK:
+        if OUTSIDE_AT[0] > time.time() - max_age:
+            return
+        OUTSIDE_AT[0] = time.time()
+        fetch_outside(pages, keep)
+
+
+def fetch_outside(pages, keep):
     """Open youtube.com/shorts/ like a visitor with no account, then ask for the Shorts that follow
     (8 per request, as YouTube's own page does). Saved as Shorts, so they never steer Home / New to you."""
-    if OUTSIDE_AT[0] > time.time() - max_age:
-        return
-    OUTSIDE_AT[0] = time.time()
     page, d = yt_data("https://www.youtube.com/shorts/")
     seed = next(walk(d, "reelWatchEndpoint"), {}).get("videoId", "")
     ver = (re.findall(r'"INNERTUBE_CLIENT_VERSION":"([^"]+)"', page) or ["2.20261105.05.01"])[0]
@@ -329,6 +347,8 @@ def refresh_outside(max_age=3600, pages=5, keep=200):
         ok = known | {r["id"] for r in got}
         new = [v for v in ids if v in ok]
         OUTSIDE[:] = (new + [v for v in OUTSIDE if v not in ok])[:keep]
+        c.execute("DELETE FROM outside")
+        c.executemany("INSERT INTO outside(pos, video_id) VALUES(?,?)", enumerate(OUTSIDE))
     finally:
         c.close()
 
@@ -922,7 +942,7 @@ def tidy(c, now=None):
     c.execute("DELETE FROM searches WHERE auto=1 AND at < ?", (old,))   # YakTube's own topic searches, once stale   # passed-over picks get another chance after a month
     n = c.execute(
         "DELETE FROM videos WHERE id NOT IN (SELECT video_id FROM history) AND id NOT IN (SELECT video_id FROM later) "
-        "AND id NOT IN (SELECT video_id FROM ratings) "
+        "AND id NOT IN (SELECT video_id FROM ratings) AND id NOT IN (SELECT video_id FROM outside) "
         "AND id NOT IN (SELECT video_id FROM related) AND id NOT IN (SELECT src FROM related_src) "
         "AND (CASE WHEN channel_id IN (SELECT channel_id FROM subs) THEN published < ? ELSE published < ? END)",
         (now - 365 * 86400, now - 60 * 86400)).rowcount
@@ -1308,7 +1328,16 @@ addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,g;
   else if(d=="ArrowLeft"){stop();$("x").focus();return}
   var h={ArrowDown:next,PageDown:next,ArrowUp:prev,PageUp:prev,Enter:tap," ":tap,MediaPlayPause:tap,Escape:close}[d];
   if(h){stop();h()}},true);
-if(!L.length){["rt","pb"].forEach(function(x){$(x).hidden=true});return}
+// More Shorts: when 8 are left (or the list runs out), ask YakTube for the next batch and add it on the end.
+var busy=0,dry=0,want=0;
+function more(){if(busy)return;if(Date.now()<dry){if(want){want=0;toast("No more Shorts right now");go(0)}return}busy=1;
+  fetch("/shorts/more",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:"have="+L.map(function(x){return x.id}).join(",")}).then(function(r){return r.json()}).then(function(a){
+    var have={},n=0;L.forEach(function(x){have[x.id]=1});a.forEach(function(x){if(!have[x.id]){L.push(x);have[x.id]=1;n++}});
+    busy=0;if(!n)dry=Date.now()+60000;done()},function(){busy=0;dry=Date.now()+30000;done()})}
+function done(){if(!want)return;want=0;if(i+1<L.length)go(i+1);else{toast("No more Shorts right now");go(0)}}
+if(!L.length){["rt","pb"].forEach(function(x){$(x).hidden=true});
+  fetch("/shorts/more",{method:"POST"}).then(function(r){return r.json()}).then(function(a){if(a.length)location.reload()});return}
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media";f.referrerPolicy="strict-origin-when-cross-origin";
 f.style.cssText="width:100%;height:100%;border:0;display:block;pointer-events:none";
 f.src="__EMBED__"+L[0].id+"?autoplay=1&controls=0&rel=0&playsinline=1&modestbranding=1&iv_load_policy=3&enablejsapi=1&origin="+encodeURIComponent(location.origin);
@@ -1343,8 +1372,9 @@ function drop(e){if(drag==null)return;pt.t=drag*pt.d;pt.at=Date.now();p.cmd("see
 bar.addEventListener("pointerup",drop);bar.addEventListener("pointercancel",drop);
 ["click","touchstart","touchend"].forEach(function(n){bar.addEventListener(n,function(e){e.stopPropagation()})});
 function show(){rt();$("ti").textContent=L[i].title;$("ch").textContent=L[i].channel;history.replaceState(null,"","/shorts?v="+L[i].id)}
-function go(n){pt.t=pt.d=pt.at=0;i=(n+L.length)%L.length;p.st.off=0;p.st.s=-1;p.cmd("loadVideoById",[L[i].id,0]);show()}
-function next(){go(i+1)}function prev(){go(i-1)}
+function go(n){pt.t=pt.d=pt.at=0;i=(n+L.length)%L.length;p.st.off=0;p.st.s=-1;p.cmd("loadVideoById",[L[i].id,0]);show();
+  if(L.length-i<=8)more()}
+function next(){if(i+1<L.length)go(i+1);else{want=1;toast("Finding more Shorts\u2026");more()}}function prev(){go(i-1)}
 function tap(){if(p.st.muted){p.cmd("unMute");p.cmd("playVideo");p.st.muted=false;$("snd").hidden=true}
   else if(p.st.s==2){p.cmd("playVideo");p.st.s=1;$("pz").hidden=true}else{p.cmd("pauseVideo");p.st.s=2;$("pz").hidden=false}}
 var t=$("tap"),y0=null,w=0;
@@ -1353,7 +1383,7 @@ t.addEventListener("touchend",function(e){if(y0==null)return;var d=e.changedTouc
   if(d<-50)next();else if(d>50)prev();else tap()});
 t.addEventListener("click",tap);
 addEventListener("wheel",function(e){if(Math.abs(e.deltaY)<20||Date.now()-w<700)return;w=Date.now();e.deltaY>0?next():prev()},{passive:true});
-$("up").onclick=prev;$("dn").onclick=next;show()})()</script>"""
+$("up").onclick=prev;$("dn").onclick=next;show();if(L.length<=8)more()})()</script>"""
 
 
 # ---------------------------------------------------------------- icons
@@ -1728,7 +1758,7 @@ class App(BaseHTTPRequestHandler):
                  ("POST", "/subs/import"): self.sub_import, ("GET", "/subs/export"): self.sub_export,
                  ("GET", "/later"): self.later, ("GET", "/vstate"): self.vstate, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
-                 ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
+                 ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
@@ -1906,12 +1936,27 @@ class App(BaseHTTPRequestHandler):
                     f'new picks through the day</span></div><div class="grid">{"".join(self.card(r) for r in rows)}</div>')
         self.send(layout("New to you", body, self.prof, "new"))
 
-    def shorts(self):
-        first = self.q.get("v", "")
-        rows = shorts_for(self.db, self.prof["id"], first if VID_RE.match(first) else None)
+    def rated(self, rows):
+        """Adds this profile's thumb (r) to each Short, for the player's buttons."""
         mine = dict(self.db.execute("SELECT video_id, val FROM ratings WHERE profile_id=?", (self.prof["id"],)).fetchall())
         for r in rows:
             r["r"] = mine.get(r["id"], 0)
+        return rows
+
+    def shorts_more(self):
+        """For a Shorts player near the end of its list: asks YouTube for a new batch (at most once every 90 seconds,
+        however many players ask) and answers with the Shorts the player doesn't have yet."""
+        have = set(self.form().get("have", "").split(","))
+        try:
+            refresh_outside(max_age=90)
+        except Exception as ex:
+            print("[outside shorts]", ex)
+        rows = [r for r in shorts_for(self.db, self.prof["id"]) if r["id"] not in have]
+        self.send(json.dumps(self.rated(rows)), ctype="application/json")
+
+    def shorts(self):
+        first = self.q.get("v", "")
+        rows = self.rated(shorts_for(self.db, self.prof["id"], first if VID_RE.match(first) else None))
         data = json.dumps(rows).replace("</", "<\\/")
         empty = ('' if rows else '<div class="empty"><h1>No Shorts right now</h1><p>Shorts from all over YouTube show up here. '
                  'A new batch arrives every hour (and a few minutes after a restart).</p></div>')
@@ -2273,6 +2318,7 @@ class App(BaseHTTPRequestHandler):
 
 def main():
     init_db()
+    load_outside()
     threading.Thread(target=refresher_loop, daemon=True).start()
     print(f"YakTube running on http://localhost:{PORT}  (db: {DB_PATH})")
     ThreadingHTTPServer((HOST, PORT), App).serve_forever()

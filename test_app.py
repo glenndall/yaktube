@@ -780,6 +780,33 @@ class T(unittest.TestCase):
         a.open(self.base + "/seen", b"v=out00000001")
         ids = re.findall(r'"id": "(\w{11})"', self.get(a, "/shorts")[2])
         self.assertNotIn("out00000001", ids)                                             # watched outside ones don't come back
+        # the list survives a restart
+        c = app.connect()
+        self.assertEqual([r[0] for r in c.execute("SELECT video_id FROM outside ORDER BY pos")], app.OUTSIDE)
+        c.close()
+        saved, app.OUTSIDE[:] = app.OUTSIDE[:], []
+        app.load_outside()
+        self.assertEqual(app.OUTSIDE, saved)
+        # near the end of the list the player asks for more: a new batch, minus what it already has
+        sent.clear()
+        def post2(url, body, timeout=10):
+            sent.append(body)
+            return {"entries": [{"command": {"reelWatchEndpoint": {"videoId": v}}} for v in ("out00000004", "out00000002")]}
+        app.fetch, app.post_json = fetch, post2
+        try:
+            app.OUTSIDE_AT[0] = 0
+            more = lambda have: json.loads(a.open(self.base + "/shorts/more", ("have=" + have).encode()).read())
+            got = more("out00000002")
+            self.assertEqual([r["id"] for r in got], ["out00000004", "shr00000001"])
+            self.assertEqual(got[0]["r"], 0)                                             # with the thumb buttons' state
+            n = len(sent)
+            self.assertEqual(more("out00000004,shr00000001,out00000002"), [])           # nothing new...
+            self.assertEqual(len(sent), n)                                               # ...and YouTube isn't asked again so soon
+        finally:
+            app.fetch, app.post_json = fake_fetch, real_post
+        player = self.get(a, "/shorts")[2]
+        self.assertIn('fetch("/shorts/more"', player)
+        self.assertIn("if(L.length-i<=8)more()", player)
         app.OUTSIDE[:] = []
 
 if __name__ == "__main__":
