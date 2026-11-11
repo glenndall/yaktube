@@ -283,6 +283,8 @@ class T(unittest.TestCase):
         for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "New to you", "Channels"):
             self.assertIn(f"<span>{label}</span>", rail)
         self.assertLess(rail.index("<span>Search"), rail.index("<span>Home"))
+        self.assertLess(rail.index("Switch profile"), rail.index("<span>Search"))   # profile at the top...
+        self.assertLess(rail.index("<span>Channels"), rail.index("Recent channels"))   # ...recent channels at the bottom
         self.assertIn("Recent channels", rail)                          # channels you watched lately
         self.assertIn(f'href="/channel?id={CID2}"', rail)
         self.assertIn('stopImmediatePropagation', page)                 # the remote: rows and rail
@@ -638,6 +640,8 @@ class T(unittest.TestCase):
         self.assertEqual(ids, ["shr00000001", "vid00000003", "shr00000002"])            # in the order YouTube gave
         self.assertNotIn("Old </script>", page)                                         # can't break out of the script
         self.assertIn('id="x"', page)                                                   # close button
+        self.assertIn('if(d=="Enter"||d==" ")return;', page)            # remote: OK on a button presses it (not pause)
+        self.assertIn('g=a.closest("#rt,#ud")', page)                   # Up/Down move between side buttons, not Shorts
         r = a.open(self.base + "/seen", b"v=shr00000001")
         self.assertEqual(r.status, 204)
         ids = re.findall(r'"id": "(\w{11})"', self.get(a, "/shorts")[2])

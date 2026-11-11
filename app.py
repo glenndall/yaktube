@@ -1049,7 +1049,9 @@ header,.side,.rib,.bot{display:none!important}.shell{display:block}
 .tvside a span,.tvside h4{opacity:0;transition:opacity .12s}.tvside:focus-within a span,.tvside:focus-within h4{opacity:1}
 .tvside a:focus{background:#f2f2f2;color:#111;outline:none!important}.tvside a:focus svg{color:#111}
 .tvside h4{margin:18px 16px 6px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#777;white-space:nowrap}
-.tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}.tvside .me{margin-top:auto}
+.tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}
+.tvside .me{min-height:62px;margin-bottom:10px}.tvside .me span{line-height:1.2}.tvside .me small{display:block;font-size:12px;color:#888}
+.tvside a.me:focus small{color:#555}.tvside h4{border-top:1px solid #2a2a2a;padding-top:16px}
 .bare .tvside{display:none}.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
@@ -1242,8 +1244,22 @@ SHORTS_CSS = """<style>html,body{overflow:hidden;overscroll-behavior:none;backgr
 SHORTS_JS = """<script>(function(){var L=__LIST__,i=0,seen={},$=function(x){return document.getElementById(x)};
 function close(){var r=document.referrer;if(r&&r.indexOf(location.origin+"/")==0&&history.length>1)history.back();else location.href="/"}
 $("x").onclick=function(k){k.preventDefault();close()};
-addEventListener("keydown",function(k){var h={ArrowDown:next,PageDown:next,ArrowUp:prev,PageUp:prev,Enter:tap," ":tap,
-  MediaPlayPause:tap,Escape:close}[k.key];if(h){k.preventDefault();k.stopImmediatePropagation();h()}},true);
+// Remote / keyboard. With nothing selected: Up / Down change Short, OK pauses, Right goes to the buttons on the side
+// (thumbs, share), Left to ✕. On a button: OK presses it, Up / Down move between the side buttons, Left (or Down
+// from ✕) goes back to the Short.
+addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,g;
+  function stop(){k.preventDefault();k.stopImmediatePropagation()}
+  if(a&&a!=document.body&&/^(A|BUTTON)$/.test(a.tagName)){
+    if(d=="Enter"||d==" ")return;
+    g=a.closest("#rt,#ud");
+    if(g&&(d=="ArrowUp"||d=="ArrowDown")){stop();var l=[].filter.call(g.querySelectorAll("button"),function(b){return b.offsetParent}),
+      n=l[l.indexOf(a)+(d=="ArrowDown"?1:-1)];if(n)n.focus();return}
+    if((g&&g.id=="rt"&&d=="ArrowLeft")||(a.id=="x"&&(d=="ArrowDown"||d=="ArrowRight"))){stop();a.blur();return}
+    if(d!="Escape"&&d!="MediaPlayPause")return}
+  else if(d=="ArrowRight"&&!$("rt").hidden){stop();$("ru").focus();return}
+  else if(d=="ArrowLeft"){stop();$("x").focus();return}
+  var h={ArrowDown:next,PageDown:next,ArrowUp:prev,PageUp:prev,Enter:tap," ":tap,MediaPlayPause:tap,Escape:close}[d];
+  if(h){stop();h()}},true);
 if(!L.length){["rt","pb"].forEach(function(x){$(x).hidden=true});return}
 var f=document.createElement("iframe");f.allow="autoplay; encrypted-media";f.referrerPolicy="strict-origin-when-cross-origin";
 f.style.cssText="width:100%;height:100%;border:0;display:block;pointer-events:none";
@@ -1527,7 +1543,8 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
         f'{e(prof["name"][:1].upper())}</a></header>'
         f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}</nav><main>{body}</main></div>'
         f'<nav class="bot">{links(MAIN_TABS)}</nav>'
-        f'<nav class="tvside">{links(TV_TABS)}<!--tvrecent--><a class="me" href="/profiles">{av}<span>{e(prof["name"])}</span></a></nav>'
+        f'<nav class="tvside"><a class="me" href="/profiles">{av}<span>{e(prof["name"])}<small>Switch profile</small></span></a>'
+        f'{links(TV_TABS)}<!--tvrecent--></nav>'
         + PAGE_JS + '</body></html>')
 
 

@@ -50,8 +50,11 @@ No address is built in, so the same app works with anyone's YakTube.
 one and keeps the address and profile.
 
 **The TV layout** is laid out like the YouTube app on Google TV:
-- A rail of icons down the left: Search, Home, Shorts, Subscriptions, Later, History, New to you, Channels, then your
-  recently watched channels and your profile. It widens with names when the remote moves into it.
+- A rail of icons down the left: your profile (Switch profile) at the top, then Search, Home, Shorts, Subscriptions,
+  Later, History, New to you, Channels, and your recently watched channels at the bottom. It widens with names when
+  the remote moves into it.
+- Shorts with the remote: Up / Down change Short, OK pauses, Right goes to the thumbs and Share (Up / Down between
+  them, OK presses one, Left goes back), Left goes to ✕ (OK closes).
 - Home is rows you scroll sideways: *Recommended for you*, *Shorts*, then a row for each reason (*Because you watched …*,
   *New from your subscriptions*, *From your search …*). The selected video's title, channel and reason show above them.
 - Remote: Left / Right along a row, Up / Down between rows (each row remembers where you were), Left at the start of a
