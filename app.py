@@ -1544,7 +1544,7 @@ function show(a){var v=vid(a);if(!v)return;from=a;
       return '<button type="button" data-a="'+x[0]+'">'+x[1]+"</button>"}).join("")+"</div>";
     menu.querySelector("b").textContent=(a.querySelector("h3")||{}).textContent||"";
     menu.addEventListener("click",function(e){var b=e.target.closest("button");if(b)act(b.dataset.a,a,v,ch)});
-    document.body.appendChild(menu);menu.querySelector("button").focus({preventScroll:true})})}
+    document.body.appendChild(menu);hook();menu.querySelector("button").focus({preventScroll:true})})}
 function act(w,a,v,ch){shut();
   if(w=="lt")post("/later/toggle","v="+v).then(function(s){toast(s=="1"?"Saved to Watch later":"Removed from Watch later")});
   else if(w=="no"){post("/hide","v="+v+"&js=1");var n=a.nextElementSibling||a.previousElementSibling;a.remove();
@@ -1560,7 +1560,11 @@ addEventListener("keyup",function(k){if(k.key!="Enter"||!held)return;stop(k);var
   if(tm){clearTimeout(tm);tm=0;c.click()}},true);
 // The TV app watches OK itself (its WebView only passes OK on once it's let go) and calls this when it's held.
 window.yakHold=function(){var c=card(document.activeElement);if(!c||menu)return false;clearTimeout(tm);held=null;show(c);return true};
-var ob=window.yakBack;window.yakBack=function(){if(menu){shut();return true}return ob?ob():false}})()</script>"""
+// Back closes the menu. The TV app sets its own yakBack once the page has loaded (replacing this one), so the menu
+// puts itself back in front each time it opens.
+function hook(){var ob=window.yakBack;if(ob&&ob.menu)return;
+  var f=function(){if(menu){shut();return true}return ob?ob():false};f.menu=1;window.yakBack=f}
+hook()})()</script>"""
 
 # Navigation icons (24x24, filled with the text colour).
 ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
