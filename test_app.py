@@ -310,6 +310,26 @@ class T(unittest.TestCase):
         self.assertNotIn('href="/watch?v=tvr00000002"', self.get(a, "/")[2])
         with self.assertRaises(urllib.error.HTTPError):
             self.get(a, "/vstate?v=bad")
+        # rows seem endless: near a row's end the page asks for up to 12 more it doesn't show yet
+        page = self.get(a, "/")[2]
+        self.assertIn('data-row="rec"', page)
+        self.assertIn('fetch("/tv/more"', page)
+        vids = lambda h: re.findall(r'href="/(?:watch|shorts)\?v=([\w-]{11})"', h)
+        more = lambda row, have: post("/tv/more", "row=" + urllib.parse.quote(row) + "&have=" + ",".join(have)).read().decode()
+        shown = vids(page)
+        have = shown[:6]                                                 # pretend only these are on the page
+        got = vids(more("rec", have))
+        self.assertEqual(len(got), 12)
+        self.assertFalse(set(got) & set(have))                           # nothing that's already on the page
+        self.assertNotIn("tvr00000002", got)                             # nor anything marked Not interested
+        self.assertEqual(len(set(got)), 12)
+        got = more("Because you watched: Watched on TV", have)
+        self.assertTrue(vids(got))                                       # a reason's row: its own picks first
+        self.assertTrue(vids(more("subs", have)))                        # no subscriptions yet: borrows from the others
+        app.OUTSIDE_AT[0], app.OUTSIDE[:] = time.time(), ["shr00000001"]  # (no real YouTube in tests)
+        self.assertIn('class="scard" href="/shorts?v=shr00000001"', more("shorts", []))   # Shorts: more Shorts
+        self.assertEqual(more("shorts", ["shr00000001"]), "")            # (none left: the row rests a minute)
+        app.OUTSIDE[:] = []
         self.get(a, "/subs/add", {"url": "@woz"})
         page = self.get(a, "/")[2]
         h2 = re.findall(r"<h2>([^<]*)</h2>", page)

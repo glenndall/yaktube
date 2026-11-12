@@ -1596,6 +1596,23 @@ function hook(){var ob=window.yakBack;if(ob&&ob.menu)return;
   var f=function(){if(menu){shut();return true}return ob?ob():false};f.menu=1;window.yakBack=f}
 hook()})()</script>"""
 
+# TV Home: when the selection gets within 5 videos of a row's end, ask for 12 more for that row and add them on, so
+# the rows seem endless. Checked on each move and on Right at the very end (where the selection can't move); a row that
+# comes back empty rests for a minute before asking again.
+TV_ROWS_JS = """<script>(function(){var busy={};
+function ids(l){return[].map.call(l,function(a){var m=/[?&]v=([A-Za-z0-9_-]{11})/.exec(a.getAttribute("href"));
+  return m?m[1]:""}).join(",")}
+function near(a){var r=a&&a.closest&&a.closest(".trow"),k;if(!r||!a.closest(".strip"))return;
+  var l=r.querySelectorAll(".strip>a");if(l.length-[].indexOf.call(l,a)>5)return;k=r.dataset.row;
+  if(!k||busy[k]&&busy[k]>Date.now())return;busy[k]=Date.now()+30000;
+  fetch("/tv/more",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},
+    body:"row="+encodeURIComponent(k)+"&have="+ids(document.querySelectorAll(".trow .strip>a"))+"&mine="+ids(l)}).then(function(x){return x.text()}).then(function(h){
+    busy[k]=h.trim()?0:Date.now()+60000;if(h.trim())r.querySelector(".strip").insertAdjacentHTML("beforeend",h)},
+    function(){busy[k]=Date.now()+30000})}
+addEventListener("focusin",function(e){near(e.target)});
+addEventListener("keydown",function(k){if(k.key=="ArrowRight")near(document.activeElement)},true)})()</script>"""
+
+
 # Navigation icons (24x24, filled with the text colour).
 ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
     "home": '<path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/>',
@@ -1758,7 +1775,7 @@ class App(BaseHTTPRequestHandler):
                  ("POST", "/subs/import"): self.sub_import, ("GET", "/subs/export"): self.sub_export,
                  ("GET", "/later"): self.later, ("GET", "/vstate"): self.vstate, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
-                 ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
+                 ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/tv/more"): self.tv_more, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
@@ -1888,10 +1905,71 @@ class App(BaseHTTPRequestHandler):
                  ("New to you", [(r, "explore", 0, WHY["explore"]) for r in ntu]), ("Shorts", home_shorts(self.db, pid, 20))]
                 + [(k, v) for k, v in groups.items() if len(v) >= 3]
                 + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
+        key = {"Recommended for you": "rec", "New from your subscriptions": "subs", "New to you": "ntu",
+               "Shorts": "shorts", "More for you": "more"}
         return '<h1 class="sr">Home</h1>' + "".join(
-            f'<section class="trow"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
+            f'<section class="trow" data-row="{e(key.get(title, title))}"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
             + "".join(short_card(p) if title == "Shorts" else self.card(p[0], src=p[1], why=p[3]) for p in row)
-            + '</div></section>' for title, row in rows if row) + HOME_JS
+            + '</div></section>' for title, row in rows if row) + HOME_JS + TV_ROWS_JS
+
+    def tv_more(self):
+        """More videos for a TV Home row that's nearly at its end, so the rows seem endless. row is rec, subs, ntu,
+        shorts, more, or a reason ("Because you watched: …"); have is every video already on the page, mine the ones
+        in this row. Answers with up to 12 cards: the row's own kind first, then borrowed from the others, and once
+        everything known is showing, YouTube's "up next" for the last few videos in the row."""
+        f, pid = self.form(), self.prof["id"]
+        row, have, cards = f.get("row", ""), set(f.get("have", "").split(",")), []
+        def add(items, make, vid_of=lambda it: it["id"]):
+            for it in items:
+                if len(cards) >= 12:
+                    return
+                vid = vid_of(it)
+                if vid not in have:
+                    have.add(vid)
+                    cards.append(make(it))
+        if row == "shorts":
+            add(home_shorts(self.db, pid, 60) + shorts_for(self.db, pid), short_card)
+            if len(cards) < 12:
+                try:
+                    refresh_outside(max_age=90)                  # a new batch from YouTube
+                except Exception as ex:
+                    print("[outside shorts]", ex)
+                add(shorts_for(self.db, pid), short_card)
+            return self.send("".join(cards))
+        picks = [p for p in home_feed(self.db, pid, 300) if p[1] != "explore"]
+        pick = lambda p: self.card(p[0], src=p[1], why=p[3])
+        no_vids, no_chans = hidden_sets(self.db, pid)
+        uploads = lambda: [r for r in self.db.execute(       # subscriptions' uploads, newest first, going back in time
+            "SELECT v.* FROM videos v JOIN subs s ON s.channel_id=v.channel_id AND s.profile_id=? WHERE v.short=0 "
+            "AND v.id NOT IN (SELECT video_id FROM history WHERE profile_id=?) ORDER BY v.published DESC LIMIT 400",
+            (pid, pid)) if r["id"] not in no_vids and r["channel_id"] not in no_chans]
+        sub = lambda r: self.card(r, src="subs", why=WHY["subs"])
+        new = lambda r: self.card(r, src="explore", why=WHY["explore"])
+        if row == "subs":
+            add(uploads(), sub)
+        elif row == "ntu":
+            add(new_to_you(self.db, pid, 120), new)
+        elif row not in ("rec", "more"):
+            add([p for p in picks if p[3] == row], pick, lambda p: p[0]["id"])
+        add(picks, pick, lambda p: p[0]["id"])                    # then anything the engine picks
+        if len(cards) < 12:
+            add(new_to_you(self.db, pid, 120), new)
+        if len(cards) < 12:
+            add(uploads(), sub)
+        if len(cards) < 12:              # everything known is on the page: ask YouTube for "up next" of this row's last few
+            watched = {r[0] for r in self.db.execute("SELECT video_id FROM history WHERE profile_id=?", (pid,))}
+            mine = [v for v in f.get("mine", "").split(",") if VID_RE.fullmatch(v)]
+            for src in reversed(mine[-6:]):
+                if len(cards) >= 12:
+                    break
+                try:
+                    rel = fetch_related(self.db, src)
+                except Exception as ex:
+                    print("[tv more]", src, repr(ex))
+                    continue
+                add([r for r in rel if not r["short"] and r["id"] not in watched and r["id"] not in no_vids
+                     and r["channel_id"] not in no_chans], lambda r: self.card(r, src="explore"))
+        self.send("".join(cards))
 
     def impr(self):
         """Home reports the videos that were really on screen (a second or more); passed-over ones sink next time,
