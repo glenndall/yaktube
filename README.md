@@ -82,7 +82,7 @@ To preview it on a computer, add `?tv=1` to any YakTube address (`?tv=0` switche
 - **Bring your YouTube subscriptions:** Subscriptions → *Import or export subscriptions*. Choose the
   `subscriptions.csv` from Google Takeout (YouTube and YouTube Music → subscriptions), or paste any list of channel
   links. Export saves a profile's list in the same format, e.g. to copy it to another profile.
-- **Watch later:** ＋ on a video's picture, or the Watch later button under a video, saves it to the **Later** tab.
+- **Watch later:** Watch later button under a video, saves it to the **Later** tab.
   It leaves the list once you've watched it to the end.
 - **Picks up where you left off:** a video you stopped part-way resumes from there, for each profile.
 - **Channel pages:** click a channel's name (under any video, on a watch page, or in Subscriptions) to see its
@@ -108,8 +108,7 @@ To preview it on a computer, add `?tv=1` to any YakTube address (`?tv=0` switche
 - **Sound but no picture on the TV?** Some TVs can't draw 4K or 60-frames-a-second video. In the TV player, ⚙ Settings →
   **Quality** switches Auto → 720p → 480p (remembered on that TV); the line under it shows what's playing.
 - **Home-screen icon:** Safari → Share → Add to Home Screen (iPhone), or Chrome → ⋮ → Add to Home screen (Android).
-- **Not interested:** ✕ on a video on Home / New to you hides it, and offers to hide the whole channel
-  (or use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
+- **Not interested:** use *Hide from suggestions* on a channel's page). Hidden channels are listed at the bottom of Subscriptions,
   where you can unhide them. Your feed and search are not affected.
 - **Autoplay on the TV:** off by default. Switch on **Autoplay** in the TV player's ⚙ Settings (remembered on that TV)
   and when a video ends, the next "Up next" video you haven't seen starts after 10 seconds (Cancel stops it).
