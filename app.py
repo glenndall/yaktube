@@ -24,6 +24,8 @@ FEED = "https://www.youtube.com/feeds/videos.xml?channel_id="
 VID_RE = re.compile(r"^[A-Za-z0-9_-]{11}$")
 CID_RE = re.compile(r"UC[A-Za-z0-9_-]{22}")
 COLORS = ["#d9480f", "#1971c2", "#2f9e44", "#9c36b5", "#e8590c", "#0c8599", "#c2255c", "#5f3dc4"]
+PROFILE_COLORS = COLORS + ["#f59f00", "#495057"]          # a profile can be any of these (channels keep COLORS)
+AVATARS = "🐱 🐶 🦊 🐼 🐨 🐸 🦁 🐵 🦄 🐙 🐢 🐝 🚀 🍕 ⚽ 🎮 🎸 🎨 🌟 🌈 🌙 🔥 👻".split()  # a profile's picture
 PAGE_SIZE = 48
 e = html.escape
 
@@ -89,6 +91,10 @@ def init_db():
     if "best" not in [r[1] for r in c.execute("PRAGMA table_info(history)")]:           # added Nov 2026: how much of it
         c.execute("ALTER TABLE history ADD COLUMN best INTEGER DEFAULT 0")               # was watched (furthest point)
         c.execute("ALTER TABLE history ADD COLUMN dur INTEGER DEFAULT 0")                # and how long it is
+    if "avatar" not in [r[1] for r in c.execute("PRAGMA table_info(profiles)")]:        # added Nov 2026: a picture
+        c.execute("ALTER TABLE profiles ADD COLUMN avatar TEXT DEFAULT ''")              # instead of the first letter
+        c.execute("ALTER TABLE profiles ADD COLUMN pos INTEGER DEFAULT 0")               # and the order they're shown in
+        c.execute("UPDATE profiles SET pos=id")
     c.close()
 
 
@@ -1055,7 +1061,27 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .profiles{display:flex;gap:28px;justify-content:center;flex-wrap:wrap;margin:40px 0}
 .profiles button{background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;text-align:center}
 .profiles .av{width:110px;height:110px;font-size:44px;border-radius:24px;margin-bottom:10px;transition:transform .12s}
-.profiles button:hover .av{transform:scale(1.05)}
+.profiles button:hover .av,.profiles a.tile:hover .av{transform:scale(1.05)}
+.av .emo{font-style:normal;font-size:1.15em;line-height:1}
+.profiles a.tile{display:block;color:var(--fg);text-align:center;border-radius:24px}
+.profiles .tile .av{position:relative}
+.profiles .pen{position:absolute;right:-8px;bottom:-8px;width:38px;height:38px;border-radius:50%;background:var(--fg);box-shadow:0 0 0 3px var(--bg);display:grid;place-items:center}
+.profiles .pen svg{width:20px;height:20px;stroke:var(--bg)!important;fill:none;stroke:#fff;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.profiles .mv{display:flex;justify-content:center;gap:10px;margin-top:6px}
+.profiles .mv button{width:40px;height:32px;border-radius:999px;background:var(--line);font-size:14px}
+.profiles .mv button.no{visibility:hidden}
+.pedit{max-width:460px;margin:30px auto}
+.pedit .top{display:flex;gap:16px;align-items:center;margin-bottom:22px}
+.pedit .top .av{width:84px;height:84px;font-size:36px;border-radius:20px}
+.pedit .top input{flex:1;font-size:18px}
+.pedit h3{font-size:14px;color:var(--muted);margin:18px 0 8px;font-weight:600}
+.pick{display:flex;flex-wrap:wrap;gap:8px}
+.pick button{border:0;cursor:pointer;font:inherit;display:grid;place-items:center}
+.pick.cols button{width:38px;height:38px;border-radius:50%}
+.pick.faces button{width:46px;height:46px;border-radius:12px;background:var(--line);font-size:24px;color:var(--fg)}
+.pick button.on{box-shadow:0 0 0 3px var(--bg),0 0 0 5px var(--fg)}
+.pedit .acts{display:flex;gap:14px;align-items:center;margin-top:26px}
+.pedit .rm{display:block;margin-top:36px;color:#c92a2a}
 .center{text-align:center}
 .why{color:var(--accent);font-size:12px;margin-top:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
@@ -1658,6 +1684,12 @@ def rate_buttons(vid, val):
             + '</div>')
 
 
+def face(p):
+    """What's inside a profile's circle: its picture, or else the first letter of its name."""
+    a = p["avatar"] or ""
+    return f'<i class="emo">{a}</i>' if a in AVATARS else e(p["name"][:1].upper())
+
+
 def layout(title, body, prof=None, tab="", q="", bare=False):
     head = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
@@ -1670,14 +1702,14 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
     def links(tabs, icons=True):
         return "".join(f'<a href="{h}" class="{"on" if tab == k else ""}">{ICON[k] if icons else ""}<span>{n}</span></a>'
                        for k, h, n in tabs)
-    av = f'<span class="av" style="background:{prof["color"]}">{e(prof["name"][:1].upper())}</span>'
+    av = f'<span class="av" style="background:{prof["color"]}">{face(prof)}</span>'
     return head + (
         f'<header><a class="logo" href="/">Yak<b>Tube</b></a>'
         f'<nav class="rib">{links(MORE_TABS, False)}<a href="/profiles">{av}<span>Profiles</span></a></nav>'
         f'<form class="go" action="/go"><input type="text" name="q" placeholder="Search, or paste a YouTube link…" '
         f'autocomplete="off" value="{e(q)}"></form>'
         f'<a href="/profiles" title="Switch profile ({e(prof["name"])})" class="av" style="background:{prof["color"]}">'
-        f'{e(prof["name"][:1].upper())}</a></header>'
+        f'{face(prof)}</a></header>'
         f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}</nav><main>{body}</main></div>'
         f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         f'<nav class="tvside"><a class="me" href="/profiles">{av}<span>{e(prof["name"])}<small>Switch profile</small></span></a>'
@@ -1793,31 +1825,113 @@ class App(BaseHTTPRequestHandler):
             self.db.close()
 
     # -- profiles
+    PEN = '<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16zM14 6l4 4"/></svg>'
+
     def get_profiles(self, path):
+        if path == "/profiles/edit":
+            return self.profile_edit()
+        if path == "/profiles/remove":
+            return self.profile_remove()
         manage = self.q.get("manage") == "1"
-        tiles = "".join(
-            f'<form method="post" action="/profiles/{"delete" if manage else "select"}">'
-            f'<input type="hidden" name="id" value="{p["id"]}"><button>'
-            f'<div class="av" style="background:{p["color"]}">{e(p["name"][:1].upper())}</div>'
-            f'{e(p["name"])}{"<div class=meta>Remove</div>" if manage else ""}</button></form>'
-            for p in self.db.execute("SELECT * FROM profiles ORDER BY id"))
+        ps = self.db.execute("SELECT * FROM profiles ORDER BY pos, id").fetchall()
+        moved, d = self.q.get("moved", ""), self.q.get("d", "")
+        tiles = []
+        for i, p in enumerate(ps):
+            av = f'<div class="av" style="background:{p["color"]}">{face(p)}'
+            if not manage:
+                tiles.append(f'<form method="post" action="/profiles/select"><input type="hidden" name="id" value="{p["id"]}">'
+                             f'<button>{av}</div>{e(p["name"])}</button></form>')
+                continue
+            def mv(step, label, arrow):   # move buttons; after a move, the same button keeps the focus
+                hid = " no" if not 0 <= i + step < len(ps) else ""
+                af = " autofocus" if moved == str(p["id"]) and d == str(step) and not hid else ""
+                return (f'<form method="post" action="/profiles/move"><input type="hidden" name="id" value="{p["id"]}">'
+                        f'<input type="hidden" name="d" value="{step}"><button class="{hid}" title="{label}"{af}>{arrow}</button></form>')
+            first = " autofocus" if i == 0 and not moved else ""
+            tiles.append(f'<div><a class="tile" href="/profiles/edit?id={p["id"]}" title="Edit {e(p["name"])}"{first}>'
+                         f'{av}<span class="pen">{self.PEN}</span></div>{e(p["name"])}</a>'
+                         f'<div class="mv">{mv(-1, "Move left", "◀")}{mv(1, "Move right", "▶")}</div></div>')
+        add = ('' if manage else
+               f'<form class="center" method="post" action="/profiles/add" style="display:flex;gap:8px;max-width:360px;margin:0 auto">'
+               f'<input type="text" name="name" placeholder="New profile name" maxlength="30" required>'
+               f'<button class="btn">Add</button></form>')
         body = (f'<div class="center"><div class="logo" style="font-size:34px;margin-top:40px">Yak<b>Tube</b></div>'
-                f'<h1 style="margin-top:28px">{"Remove a profile" if manage else "Who’s watching?"}</h1></div>'
-                f'<div class="profiles">{tiles}</div>'
-                f'<form class="center" method="post" action="/profiles/add" style="display:flex;gap:8px;max-width:360px;margin:0 auto">'
-                f'<input type="text" name="name" placeholder="New profile name" maxlength="30" required>'
-                f'<button class="btn">Add</button></form><p class="center meta" style="margin-top:22px">'
+                f'<h1 style="margin-top:28px">{"Manage profiles" if manage else "Who’s watching?"}</h1>'
+                f'{"<p class=meta>Pick a profile to change it, or move it with the arrows.</p>" if manage else ""}</div>'
+                f'<div class="profiles">{"".join(tiles)}</div>{add}<p class="center meta" style="margin-top:22px">'
                 f'<a href="/profiles{"" if manage else "?manage=1"}">{"Done" if manage else "Manage profiles"}</a></p>')
         self.send(layout("Profiles", body))
+
+    def one_profile(self, key="id", src=None):
+        v = (src or self.q).get(key, "")
+        return self.db.execute("SELECT * FROM profiles WHERE id=?", (int(v),)).fetchone() if v.isdigit() else None
+
+    def profile_edit(self):
+        p = self.one_profile()
+        if not p:
+            return self.redirect("/profiles?manage=1")
+        cur = p["avatar"] if p["avatar"] in AVATARS else ""
+        cols = "".join(f'<button type="button" data-c="{c}" title="Colour" style="background:{c}"'
+                       f'{" class=on" if c == p["color"] else ""}></button>' for c in PROFILE_COLORS)
+        faces = "".join(f'<button type="button" data-a="{a}" title="{"First letter" if not a else "Picture"}"'
+                        f'{" class=on" if a == cur else ""}>{a or "Aa"}</button>' for a in [""] + AVATARS)
+        err = '<div class="err">Another profile already has that name.</div>' if self.q.get("err") == "taken" else ""
+        body = (f'<form class="pedit" method="post" action="/profiles/save"><h1>Edit profile</h1>{err}'
+                f'<input type="hidden" name="id" value="{p["id"]}"><input type="hidden" name="color" value="{p["color"]}">'
+                f'<input type="hidden" name="avatar" value="{cur}">'
+                f'<div class="top"><div class="av" id="pv" style="background:{p["color"]}">{face(p)}</div>'
+                f'<input type="text" name="name" value="{e(p["name"])}" maxlength="30" required aria-label="Name"></div>'
+                f'<h3>Colour</h3><div class="pick cols">{cols}</div>'
+                f'<h3>Picture</h3><div class="pick faces">{faces}</div>'
+                f'<div class="acts"><button class="btn">Save</button><a href="/profiles?manage=1">Cancel</a></div>'
+                f'<a class="rm" href="/profiles/remove?id={p["id"]}">Remove this profile…</a></form>'
+                '<script>(function(){var f=document.querySelector(".pedit"),pv=f.querySelector("#pv");'
+                'function draw(){var a=f.avatar.value,n=f.name.value.trim();pv.style.background=f.color.value;'
+                'pv.innerHTML=a?"<i class=emo>"+a+"</i>":"";if(!a)pv.textContent=(n[0]||"?").toUpperCase();'
+                'f.querySelectorAll("[data-c]").forEach(function(b){b.classList.toggle("on",b.dataset.c==f.color.value)});'
+                'f.querySelectorAll("[data-a]").forEach(function(b){b.classList.toggle("on",b.dataset.a==a)})}'
+                'f.addEventListener("click",function(ev){var b=ev.target.closest("[data-c],[data-a]");if(!b)return;'
+                'if(b.dataset.c)f.color.value=b.dataset.c;else f.avatar.value=b.dataset.a;draw()});'
+                'f.name.addEventListener("input",draw)})()</script>')
+        self.send(layout("Edit profile", body))
+
+    def profile_remove(self):
+        p = self.one_profile()
+        if not p:
+            return self.redirect("/profiles?manage=1")
+        n = e(p["name"])
+        body = (f'<div class="empty"><div class="profiles" style="margin:0 0 10px"><div class="av" style="background:{p["color"]}">'
+                f'{face(p)}</div></div><h1>Remove {n}?</h1><p>This deletes {n}’s watch history, subscriptions, Watch later '
+                f'and likes. It can’t be undone.</p>'
+                f'<form method="post" action="/profiles/delete" style="display:flex;gap:14px;justify-content:center;align-items:center">'
+                f'<input type="hidden" name="id" value="{p["id"]}"><a class="btn" href="/profiles/edit?id={p["id"]}" autofocus>Keep it</a>'
+                f'<button style="background:none;border:0;color:#c92a2a;font:inherit;cursor:pointer">Remove {n}</button></form></div>')
+        self.send(layout("Remove profile", body))
 
     def post_profiles(self, path):
         f = self.form()
         if path == "/profiles/add" and f.get("name", "").strip():
-            n = self.db.execute("SELECT COUNT(*) FROM profiles").fetchone()[0]
-            self.db.execute("INSERT OR IGNORE INTO profiles(name,color) VALUES(?,?)",
-                            (f["name"].strip()[:30], COLORS[n % len(COLORS)]))
+            n, top = self.db.execute("SELECT COUNT(*), COALESCE(MAX(pos),0) FROM profiles").fetchone()
+            self.db.execute("INSERT OR IGNORE INTO profiles(name,color,pos) VALUES(?,?,?)",
+                            (f["name"].strip()[:30], COLORS[n % len(COLORS)], top + 1))
         elif path == "/profiles/select" and f.get("id", "").isdigit():
             return self.redirect("/", [("Set-Cookie", f"yak_profile={int(f['id'])}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly")])
+        elif path == "/profiles/save" and (p := self.one_profile(src=f)):
+            name = f.get("name", "").strip()[:30] or p["name"]
+            color = f.get("color") if f.get("color") in PROFILE_COLORS else p["color"]
+            avatar = f.get("avatar") if f.get("avatar") in AVATARS else ""
+            try:
+                self.db.execute("UPDATE profiles SET name=?, color=?, avatar=? WHERE id=?", (name, color, avatar, p["id"]))
+            except sqlite3.IntegrityError:                                      # the name is taken
+                return self.redirect(f"/profiles/edit?id={p['id']}&err=taken")
+            return self.redirect("/profiles?manage=1")
+        elif path == "/profiles/move" and (p := self.one_profile(src=f)) and f.get("d") in ("-1", "1"):
+            ids = [r[0] for r in self.db.execute("SELECT id FROM profiles ORDER BY pos, id")]
+            i, j = ids.index(p["id"]), ids.index(p["id"]) + int(f["d"])
+            if 0 <= j < len(ids):
+                ids[i], ids[j] = ids[j], ids[i]
+                self.db.executemany("UPDATE profiles SET pos=? WHERE id=?", list(enumerate(ids)))
+            return self.redirect(f"/profiles?manage=1&moved={p['id']}&d={f['d']}")
         elif path == "/profiles/delete" and f.get("id", "").isdigit():
             self.db.execute("DELETE FROM profiles WHERE id=?", (int(f["id"]),))
             return self.redirect("/profiles?manage=1")

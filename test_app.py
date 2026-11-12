@@ -829,5 +829,49 @@ class T(unittest.TestCase):
         self.assertIn("if(L.length-i<=8)more()", player)
         app.OUTSIDE[:] = []
 
+    def test_21_profile_edit(self):
+        op = self.login("Edy")
+        self.login("Edy2")
+        db = app.connect()
+        pid = db.execute("SELECT id FROM profiles WHERE name='Edy'").fetchone()[0]
+        manage = self.get(op, "/profiles?manage=1")[2]
+        self.assertIn(f'href="/profiles/edit?id={pid}"', manage)                   # tiles open the editor...
+        self.assertNotIn('action="/profiles/delete"', manage)                       # ...and never delete straight away
+        page = self.get(op, f"/profiles/edit?id={pid}")[2]
+        self.assertIn('data-a="🦊"', page)
+        self.assertIn('data-c="#495057"', page)
+        # save: new name, colour and picture; a bad colour or picture is ignored
+        self.get(op, "/profiles/save", {"id": pid, "name": " Eddie ", "color": "#495057", "avatar": "🦊"})
+        r = db.execute("SELECT name, color, avatar FROM profiles WHERE id=?", (pid,)).fetchone()
+        self.assertEqual(tuple(r), ("Eddie", "#495057", "🦊"))
+        self.get(op, "/profiles/save", {"id": pid, "name": "Eddie", "color": "red;x", "avatar": "<b>"})
+        self.assertEqual(tuple(db.execute("SELECT color, avatar FROM profiles WHERE id=?", (pid,)).fetchone()), ("#495057", ""))
+        self.get(op, "/profiles/save", {"id": pid, "name": "Eddie", "color": "#495057", "avatar": "🦊"})
+        self.assertIn('<i class="emo">🦊</i>', self.get(op, "/later")[2])          # the picture shows in the header
+        # a name another profile has is refused
+        _, url, page = self.get(op, "/profiles/save", {"id": pid, "name": "Edy2", "color": "#495057"})
+        self.assertIn("err=taken", url)
+        self.assertIn("already has that name", page)
+        self.assertEqual(db.execute("SELECT name FROM profiles WHERE id=?", (pid,)).fetchone()[0], "Eddie")
+        # moving: swap with its neighbour, and keep the focus on the arrow pressed
+        order = lambda: [r[0] for r in db.execute("SELECT id FROM profiles ORDER BY pos, id")]
+        before = order()
+        i = before.index(pid)
+        _, url, page = self.get(op, "/profiles/move", {"id": pid, "d": "-1"})
+        self.assertEqual(order().index(pid), i - 1)
+        self.assertIn(f"moved={pid}&d=-1", url)
+        self.assertIn('title="Move left" autofocus', page)
+        self.get(op, "/profiles/move", {"id": pid, "d": "1"})
+        self.assertEqual(order(), before)
+        self.get(op, "/profiles/move", {"id": order()[0], "d": "-1"})              # the first can't go further left
+        self.assertEqual(order(), before)
+        # removing asks first, with "Keep it" as the safe choice
+        page = self.get(op, f"/profiles/remove?id={pid}")[2]
+        self.assertIn("Remove Eddie?", page)
+        self.assertIn("autofocus>Keep it", page)
+        self.get(op, "/profiles/delete", {"id": pid})
+        self.assertIsNone(db.execute("SELECT id FROM profiles WHERE id=?", (pid,)).fetchone())
+        db.close()
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
