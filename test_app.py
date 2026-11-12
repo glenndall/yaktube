@@ -872,6 +872,9 @@ class T(unittest.TestCase):
         self.get(op, "/profiles/delete", {"id": pid})
         self.assertIsNone(db.execute("SELECT id FROM profiles WHERE id=?", (pid,)).fetchone())
         db.close()
+        subs = self.get(self.login("Zippy"), "/subs")[2]                          # a Takeout .zip can be chosen as is
+        self.assertIn('accept=".zip,', subs)
+        self.assertIn('DecompressionStream("deflate-raw")', subs)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

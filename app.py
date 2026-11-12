@@ -1690,6 +1690,36 @@ def face(p):
     return f'<i class="emo">{a}</i>' if a in AVATARS else e(p["name"][:1].upper())
 
 
+# The subscriptions import's file picker. A Takeout .zip can be gigabytes (it holds your own uploads too), so the page
+# reads only the zip's table of contents and subscriptions.csv out of it, in the browser; nothing big is sent anywhere.
+IMPORT_JS = r"""<script>(function(){var inp=document.querySelector(".imp input[type=file]"),t=document.querySelector(".imp textarea"),
+msg=document.querySelector(".imp .zipmsg");
+function u16(d,o){return d.getUint16(o,true)}function u32(d,o){return d.getUint32(o,true)}function u64(d,o){return u32(d,o)+u32(d,o+4)*4294967296}
+function part(f,a,b){return f.slice(a,b).arrayBuffer().then(function(x){return new DataView(x)})}
+function fromZip(f){var tail=Math.min(f.size,65557+20);
+ return part(f,f.size-tail,f.size).then(function(d){var i=d.byteLength-22;while(i>=0&&u32(d,i)!=0x06054b50)i--;if(i<0)throw"zip";
+  var size=u32(d,i+12),off=u32(d,i+16);
+  if(off==0xFFFFFFFF&&i>=20&&u32(d,i-20)==0x07064b50){var z=u64(d,i-12);return part(f,z,z+56).then(function(e){return[u64(e,40),u64(e,48)]})}
+  return[size,off]})
+ .then(function(c){return part(f,c[1],c[1]+c[0])})
+ .then(function(d){var o=0,hit=null;
+  while(o+46<=d.byteLength&&u32(d,o)==0x02014b50){var n=u16(d,o+28),x=u16(d,o+30),k=u16(d,o+32),
+   name=new TextDecoder().decode(new Uint8Array(d.buffer,o+46,n));
+   if(/(^|\/)subscriptions\.csv$/i.test(name)){var csz=u32(d,o+20),usz=u32(d,o+24),off=u32(d,o+42),p=o+46+n,end=p+x;
+    while(p+4<=end){var id=u16(d,p),l=u16(d,p+2),q=p+4;
+     if(id==1){if(usz==0xFFFFFFFF)q+=8;if(csz==0xFFFFFFFF){csz=u64(d,q);q+=8}if(off==0xFFFFFFFF)off=u64(d,q)}p+=4+l}
+    hit={m:u16(d,o+10),csz:csz,off:off};break}
+   o+=46+n+x+k}
+  if(!hit)throw"none";
+  return part(f,hit.off,hit.off+30).then(function(h){var s=hit.off+30+u16(h,26)+u16(h,28),b=f.slice(s,s+hit.csz);
+   if(hit.m==0)return b.text();if(hit.m!=8)throw"zip";
+   return new Response(b.stream().pipeThrough(new DecompressionStream("deflate-raw"))).text()})})}
+inp.onchange=function(){var f=this.files[0],zip;if(!f)return;zip=/\.zip$/i.test(f.name);msg.textContent=zip?"Looking in the zip…":"";
+ (zip?fromZip(f):f.text()).then(function(s){t.value=s;
+  msg.textContent=zip?"Found subscriptions.csv with "+(s.match(/(^|\n)UC[\w-]{22},/g)||[]).length+" channels. Press Import.":""})
+ .catch(function(e){msg.textContent=e=="none"?"There’s no subscriptions.csv in this zip. If Takeout split your download "
+  +"into several zips, try the others.":"Couldn’t read that zip. Unzip it and choose subscriptions/subscriptions.csv instead."})}})()</script>"""
+
 def layout(title, body, prof=None, tab="", q="", bare=False):
     head = (f'<!doctype html><html lang="en"><head><meta charset="utf-8">'
             f'<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">'
@@ -2375,12 +2405,12 @@ class App(BaseHTTPRequestHandler):
             f'<input type="hidden" name="next" value="/subs"><button class="btn ghost small">Unhide</button></form></div>' for r in off)
         port = ('<details class="imp"><summary class="meta">Import or export subscriptions</summary>'
                 '<form method="post" action="/subs/import"><p class="meta">From YouTube: Google Takeout → “YouTube and YouTube Music” → '
-                'subscriptions → <b>subscriptions.csv</b>. Choose that file, or paste any list of channel links. '
-                'Export saves this profile\'s list in the same format (handy for copying it to another profile).</p>'
-                '<input type="file" accept=".csv,.txt,.opml,.xml,text/*" onchange="var r=new FileReader(),t=this.form.text;'
-                'r.onload=function(){t.value=r.result};r.readAsText(this.files[0])">'
+                'subscriptions → <b>subscriptions.csv</b>. Choose the Takeout .zip as it downloaded, or that file, or paste '
+                'any list of channel links. Export saves this profile\'s list in the same format (handy for copying it to another profile).</p>'
+                '<input type="file" accept=".zip,.csv,.txt,.opml,.xml,application/zip,text/*"><p class="meta zipmsg"></p>'
                 '<textarea name="text" rows="5" required placeholder="Channel Id,Channel Url,Channel Title"></textarea>'
-                '<button class="btn small">Import</button> <a class="btn ghost small" href="/subs/export">Export</a></form></details>')
+                '<button class="btn small">Import</button> <a class="btn ghost small" href="/subs/export">Export</a></form></details>'
+                + IMPORT_JS)
         body = (f'<h1>Subscriptions <span class="meta">({len(rows)})</span></h1>'
                 + (f'<div class="err">{e(err)}</div>' if err else "") + note
                 + f'<form method="post" action="/subs/add" class="bar"><input type="text" name="url" value="{pre}" required '
