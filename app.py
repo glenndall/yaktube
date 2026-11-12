@@ -1569,7 +1569,7 @@ function shut(){if(!menu)return;menu.remove();menu=null;if(from&&document.contai
 function show(a){var v=vid(a);if(!v)return;from=a;
   fetch("/vstate?v="+v).then(function(r){return r.json()}).then(function(s){if(menu||document.activeElement!=a)return;
     var ch=a.querySelector("[data-ch]"),l=[["no","Not interested"],["lt",s.later?"Remove from Watch later":"Watch later"]];
-    if(ch&&ch.dataset.ch)l.push(["ch","Go to channel"]);
+    if(ch&&ch.dataset.ch)l.push(["ch","Go to channel"],["nc","Don't recommend channel"]);
     menu=document.createElement("div");menu.className="tvlm";menu.innerHTML="<div><b></b>"+l.map(function(x){
       return '<button type="button" data-a="'+x[0]+'">'+x[1]+"</button>"}).join("")+"</div>";
     menu.querySelector("b").textContent=(a.querySelector("h3")||{}).textContent||"";
@@ -1579,7 +1579,12 @@ function act(w,a,v,ch){shut();
   if(w=="lt")post("/later/toggle","v="+v).then(function(s){toast(s=="1"?"Saved to Watch later":"Removed from Watch later")});
   else if(w=="no"){post("/hide","v="+v+"&js=1");var n=a.nextElementSibling||a.previousElementSibling;a.remove();
     if(n)n.focus({preventScroll:true});toast("Hidden from your suggestions")}
-  else if(w=="ch")location.href="/channel?id="+ch.dataset.ch}
+  else if(w=="ch")location.href="/channel?id="+ch.dataset.ch;
+  else if(w=="nc"){var id=ch.dataset.ch;post("/hide","c="+id+"&js=1");      // the whole channel: gone from every row
+    var n=a.nextElementSibling||a.previousElementSibling;
+    [].forEach.call(document.querySelectorAll('[data-ch="'+id+'"]'),function(x){var c=card(x);if(c){if(c==n)n=null;c.remove()}});
+    if(!n||!document.contains(n))n=document.querySelector(".trow .strip>a,a.card");if(n)n.focus({preventScroll:true});
+    toast("You won't see this channel in suggestions")}}
 addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,c;
   if(menu){if(k.repeat){stop(k);return}
     if(d=="ArrowUp"||d=="ArrowDown"){stop(k);var b=[].slice.call(menu.querySelectorAll("button")),i=b.indexOf(a);
