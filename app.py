@@ -987,27 +987,39 @@ def refresher_loop():
 
 # ---------------------------------------------------------------- views
 CSS = """
-:root{--bg:#f7f6f3;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e4e2dd;--accent:#d9480f}
-@media (prefers-color-scheme:dark){:root{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}}
+:root{--bg:#f7f6f3;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e4e2dd;--accent:#d9480f;color-scheme:light}
+/* dark follows the system unless the header toggle chose one (html data-theme, kept in localStorage) */
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;color-scheme:dark}
+.theme{background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;flex:none}
+.theme svg{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
+.theme .sun,:root[data-theme=dark] .theme .moon{display:none}:root[data-theme=dark] .theme .sun{display:contents}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .theme .moon{display:none}:root:not([data-theme=light]) .theme .sun{display:contents}}
+.theme .moon{display:contents}
+header .theme{display:none;padding:6px;border-radius:50%;place-items:center}header .theme:hover{background:var(--card)}header .theme small{display:none}
+.side .theme{display:flex;align-items:center;gap:20px;width:100%;padding:9px 14px;border-radius:10px;text-align:left;white-space:nowrap}
+.side .theme small{font-size:inherit}
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
 a{color:inherit;text-decoration:none}
 header{position:sticky;top:0;z-index:5;display:flex;gap:14px;align-items:center;padding:10px 20px;
   background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
 .logo{font-weight:800;font-size:20px;letter-spacing:-.6px;white-space:nowrap}.logo b{color:var(--accent)}
-header .logo{width:196px;flex:none;padding-left:8px}
+header .logo{width:150px;flex:none}
+.burger{background:none;border:0;color:var(--fg);padding:8px;margin-left:-4px;border-radius:50%;cursor:pointer;display:grid;place-items:center;flex:none}
+.burger:hover{background:var(--card)}.burger svg{width:24px;height:24px;fill:currentColor}
 form.go{flex:1;max-width:620px;margin:0 auto;display:flex}
 nav svg,.rate svg{width:22px;height:22px;flex:none;fill:currentColor}
 .rib,.bot,.tvside{display:none}
 .shell{display:flex;align-items:flex-start}
 .side{position:sticky;top:57px;width:228px;flex:none;max-height:calc(100vh - 57px);overflow-y:auto;padding:10px 10px 20px;scrollbar-width:thin}
 .side a{display:flex;align-items:center;gap:20px;padding:9px 14px;border-radius:10px;white-space:nowrap}
-.side a:hover{background:var(--card)}.side a.on{background:var(--card);font-weight:650;box-shadow:0 0 0 1px var(--line)}
+.side a:hover,.side .theme:hover{background:var(--card)}.side a.on{background:var(--card);font-weight:650;box-shadow:0 0 0 1px var(--line)}
 .side a.on svg{color:var(--accent)}
 .side hr{border:0;border-top:1px solid var(--line);margin:10px 6px}
-@media(max-width:1100px) and (min-width:721px){header .logo{width:auto}.side{width:80px;padding:6px 4px}
-  .side a{flex-direction:column;gap:5px;padding:13px 2px 10px;font-size:10.5px;text-align:center;white-space:normal;line-height:1.15}
-  .side a.on{box-shadow:none}.side hr{display:none}}
+/* the icon rail: by default between 721 and 1100px; the burger flips it (html data-side=mini|full, kept in localStorage) */
+@media(min-width:1101px){:root[data-side=mini] header .logo{width:auto}:root[data-side=mini] .side{width:80px;padding:6px 4px}:root[data-side=mini] .side a,:root[data-side=mini] .side .theme{flex-direction:column;gap:5px;padding:13px 2px 10px;font-size:10.5px;text-align:center;white-space:normal;line-height:1.15}:root[data-side=mini] .side a.on{box-shadow:none}:root[data-side=mini] .side hr{display:none}}
+@media(max-width:1100px) and (min-width:721px){:root:not([data-side=full]) header .logo{width:auto}:root:not([data-side=full]) .side{width:80px;padding:6px 4px}:root:not([data-side=full]) .side a,:root:not([data-side=full]) .side .theme{flex-direction:column;gap:5px;padding:13px 2px 10px;font-size:10.5px;text-align:center;white-space:normal;line-height:1.15}:root:not([data-side=full]) .side a.on{box-shadow:none}:root:not([data-side=full]) .side hr{display:none}}
 input[type=text]{width:100%;padding:8px 14px;border:1px solid var(--line);border-radius:999px;background:var(--card);color:var(--fg);font:inherit}
 input[type=text]:focus{outline:2px solid var(--accent);outline-offset:-1px}
 .btn{display:inline-block;padding:7px 16px;border-radius:999px;border:0;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
@@ -1057,7 +1069,8 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .list>div{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}.list>div:first-child{border:0}
 .list .grow{flex:1;min-width:0}
 .err{background:#fff0e6;color:#a33a00;padding:10px 14px;border-radius:10px;margin-bottom:16px}
-@media (prefers-color-scheme:dark){.err{background:#3a1f10;color:#ffb38a}}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]) .err{background:#3a1f10;color:#ffb38a}}
+:root[data-theme=dark] .err{background:#3a1f10;color:#ffb38a}
 .profiles{display:flex;gap:28px;justify-content:center;flex-wrap:wrap;margin:40px 0}
 .profiles button{background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;text-align:center}
 .profiles .av{width:110px;height:110px;font-size:44px;border-radius:24px;margin-bottom:10px;transition:transform .12s}
@@ -1085,7 +1098,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .center{text-align:center}
 .why{color:var(--accent);font-size:12px;margin-top:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-@media(max-width:720px){header{flex-wrap:wrap;padding:10px 16px;row-gap:10px}header>.av,.side{display:none}
+@media(max-width:720px){header{flex-wrap:wrap;padding:10px 16px;row-gap:10px}header>.av,.side,.burger{display:none}header .theme{display:grid;margin-left:auto}
   header .logo{width:auto;padding:0}
   .rib{display:flex;gap:8px;order:2;flex-basis:calc(100% + 32px);margin:0 -16px;padding:0 16px;overflow-x:auto;scrollbar-width:none}
   .rib::-webkit-scrollbar{display:none}
@@ -1108,7 +1121,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 
 # Extra styles when the page is shown by the YakTube TV app (its browser says "YakTubeTV").
 TV_CSS = """<style>
-:root{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
+:root,:root[data-theme],:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
 body{font-size:17px}main{padding:18px 28px 40px 120px;max-width:none}
 header,.side,.rib,.bot{display:none!important}.shell{display:block}
 /* the rail: icons down the left; it widens with names when the remote moves into it */
@@ -1534,7 +1547,17 @@ def side_row(r, seen=False):
 # One small script on every page: "/" jumps to the search box, and the bits of a video card that aren't links of
 # their own (so the TV remote still steps from video to video) react to a click or tap: the channel name opens its
 # page.
-PAGE_JS = """<script>addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))
+THEME_BTN = ('<button type="button" class="theme" title="Light or dark" aria-label="Switch light or dark">'
+             '<span class="moon"><svg viewBox="0 0 24 24"><path d="M20 14.5A8 8 0 0 1 9.5 4 8 8 0 1 0 20 14.5z"/></svg><small>Dark mode</small></span>'
+             '<span class="sun"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4'
+             'M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg><small>Light mode</small></span></button>')
+
+PAGE_JS = """<script>document.querySelectorAll(".theme").forEach(function(b){b.onclick=function(){var r=document.documentElement,
+d=(r.dataset.theme||(matchMedia("(prefers-color-scheme:dark)").matches?"dark":"light"))=="dark"?"light":"dark";
+r.dataset.theme=d;try{localStorage.yaktheme=d}catch(x){}}});
+document.querySelectorAll(".burger").forEach(function(b){b.onclick=function(){var r=document.documentElement,
+d=(r.dataset.side||(innerWidth>1100?"full":"mini"))=="full"?"mini":"full";r.dataset.side=d;try{localStorage.yakside=d}catch(x){}}});
+addEventListener("keydown",k=>{if(k.key=="/"&&!/INPUT|TEXTAREA/.test(document.activeElement.tagName))
 {k.preventDefault();document.querySelector(".go input").focus()}});
 addEventListener("click",k=>{var t=k.target,c;if(!t.closest)return;
 function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b}).then(r=>r.text())}
@@ -1726,7 +1749,8 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
             f'<title>{e(title)} · YakTube</title><link rel="icon" type="image/png" href="/favicon.png">'
             f'<link rel="apple-touch-icon" href="/apple-touch-icon.png"><link rel="manifest" href="/manifest.json" crossorigin="use-credentials">'
             f'<meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes">'
-            f'<meta name="apple-mobile-web-app-title" content="YakTube"><style>{CSS}</style></head><body{" class=bare" if bare else ""}>')
+            f'<meta name="apple-mobile-web-app-title" content="YakTube"><style>{CSS}</style>'
+            f'<script>try{{var t=localStorage.yaktheme,s=localStorage.yakside,r=document.documentElement;if(t)r.dataset.theme=t;if(s)r.dataset.side=s}}catch(x){{}}</script></head><body{" class=bare" if bare else ""}>')
     if not prof:
         return head + f'<main>{body}</main></body></html>'
     def links(tabs, icons=True):
@@ -1734,13 +1758,15 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
                        for k, h, n in tabs)
     av = f'<span class="av" style="background:{prof["color"]}">{face(prof)}</span>'
     return head + (
-        f'<header><a class="logo" href="/">Yak<b>Tube</b></a>'
+        f'<header><button type="button" class="burger" title="Collapse or expand the menu" aria-label="Menu">'
+        f'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg></button>'
+        f'<a class="logo" href="/">Yak<b>Tube</b></a>'
         f'<nav class="rib">{links(MORE_TABS, False)}<a href="/profiles">{av}<span>Profiles</span></a></nav>'
         f'<form class="go" action="/go"><input type="text" name="q" placeholder="Search, or paste a YouTube link…" '
         f'autocomplete="off" value="{e(q)}"></form>'
         f'<a href="/profiles" title="Switch profile ({e(prof["name"])})" class="av" style="background:{prof["color"]}">'
-        f'{face(prof)}</a></header>'
-        f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}</nav><main>{body}</main></div>'
+        f'{face(prof)}</a>{THEME_BTN}</header>'
+        f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}<hr>{THEME_BTN}</nav><main>{body}</main></div>'
         f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         f'<nav class="tvside"><a class="me" href="/profiles">{av}<span>{e(prof["name"])}<small>Switch profile</small></span></a>'
         f'{links(TV_TABS)}<!--tvrecent--></nav>'
