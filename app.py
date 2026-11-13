@@ -14,6 +14,18 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("YAK_DB", os.path.join(HERE, "yaktube.db"))
+
+
+def _version():
+    """YakTube's version, worked out from this file: the day it was last updated (copied to the NAS) and a short code
+    that changes with every change to it, e.g. "2026.11.12 · 3f9c2a1". Shown in Settings."""
+    import hashlib
+    with open(os.path.abspath(__file__), "rb") as f:
+        code = hashlib.sha1(f.read()).hexdigest()[:7]
+    return time.strftime("%Y.%m.%d", time.localtime(os.path.getmtime(os.path.abspath(__file__)))) + " · " + code
+
+
+VERSION = _version()
 HOST = os.environ.get("YAK_HOST", "0.0.0.0")
 PORT = int(os.environ.get("YAK_PORT", "8080"))
 REFRESH_MIN = int(os.environ.get("YAK_REFRESH_MIN", "30"))
@@ -67,6 +79,7 @@ CREATE TABLE IF NOT EXISTS ratings(
   profile_id INTEGER NOT NULL REFERENCES profiles(id) ON DELETE CASCADE,
   video_id TEXT NOT NULL, val INTEGER NOT NULL, at INTEGER, PRIMARY KEY(profile_id, video_id));
 CREATE TABLE IF NOT EXISTS outside(pos INTEGER PRIMARY KEY, video_id TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS settings(k TEXT PRIMARY KEY, v TEXT);
 """
 
 
@@ -95,14 +108,30 @@ def init_db():
         c.execute("ALTER TABLE profiles ADD COLUMN avatar TEXT DEFAULT ''")              # instead of the first letter
         c.execute("ALTER TABLE profiles ADD COLUMN pos INTEGER DEFAULT 0")               # and the order they're shown in
         c.execute("UPDATE profiles SET pos=id")
+    for k, v in c.execute("SELECT k, v FROM settings WHERE k IN ('gl','hl')"):        # Settings: region and language
+        REGION[k] = v
     c.close()
 
 
 # ---------------------------------------------------------------- youtube
+# Region and language (Settings): which country's and language's Shorts, suggestions and search results YouTube gives
+# us, and the language captions turn on in. One for the whole of YakTube, as the Shorts list and the "up next" lists
+# it keeps are shared by every profile. Until it's changed, what YakTube always asked for: the US, in English.
+REGIONS = (("CA", "Canada"), ("US", "United States"), ("MX", "Mexico"), ("GB", "United Kingdom"), ("AU", "Australia"),
+           ("ES", "Spain"), ("FR", "France"))
+LANGS = (("en", "English"), ("es", "Español"), ("fr", "Français"))
+REGION = {"gl": "US", "hl": "en"}
+
+
+def yt_cookie():
+    """SOCS / CONSENT skip the EU consent wall; PREF is YouTube's own region and language choice."""
+    return f"SOCS=CAI; CONSENT=YES+1; PREF=hl={REGION['hl']}&gl={REGION['gl']}"
+
+
 def fetch(url, timeout=10):
+    hl, gl = REGION["hl"], REGION["gl"]
     req = urllib.request.Request(url, headers={
-        "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9",
-        "Cookie": "SOCS=CAI; CONSENT=YES+1"})  # skip the EU consent wall
+        "User-Agent": UA, "Accept-Language": f"{hl}-{gl},{hl};q=0.9", "Cookie": yt_cookie()})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read().decode("utf-8", "replace")
 
@@ -289,7 +318,7 @@ def refresh_channel(c, cid, deep=False):
 
 def post_json(url, body, timeout=10):
     req = urllib.request.Request(url, json.dumps(body).encode(), {
-        "User-Agent": UA, "Content-Type": "application/json", "Cookie": "SOCS=CAI; CONSENT=YES+1"})
+        "User-Agent": UA, "Content-Type": "application/json", "Cookie": yt_cookie()})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read())
 
@@ -326,7 +355,7 @@ def fetch_outside(pages, keep):
     ver = (re.findall(r'"INNERTUBE_CLIENT_VERSION":"([^"]+)"', page) or ["2.20261105.05.01"])[0]
     if not VID_RE.match(seed):
         return
-    ctx = {"client": {"clientName": "WEB", "clientVersion": ver, "hl": "en", "gl": "US"}}
+    ctx = {"client": {"clientName": "WEB", "clientVersion": ver, "hl": REGION["hl"], "gl": REGION["gl"]}}
     body, ids = {"sequenceParams": base64.urlsafe_b64encode(b"\n\x0b" + seed.encode()).decode()}, [seed]  # field 1 = start
     for _ in range(pages):
         r = post_json("https://www.youtube.com/youtubei/v1/reel/reel_watch_sequence?prettyPrint=false", dict(body, context=ctx))
@@ -1004,7 +1033,8 @@ body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 -apple-system,
 a{color:inherit;text-decoration:none}
 header{position:sticky;top:0;z-index:5;display:flex;gap:14px;align-items:center;padding:10px 20px;
   background:color-mix(in srgb,var(--bg) 92%,transparent);backdrop-filter:blur(8px);border-bottom:1px solid var(--line)}
-.logo{font-weight:800;font-size:20px;letter-spacing:-.6px;white-space:nowrap}.logo b{color:var(--accent)}
+.logo{display:inline-flex;align-items:center;gap:.17em;font-weight:800;font-size:20px;letter-spacing:-.6px;white-space:nowrap}
+.logo b{color:var(--accent)}.logo svg{width:1.42em;height:1.08em;flex:none}
 header .logo{width:150px;flex:none}
 .burger{background:none;border:0;color:var(--fg);padding:8px;margin-left:-4px;border-radius:50%;cursor:pointer;display:grid;place-items:center;flex:none}
 .burger:hover{background:var(--card)}.burger svg{width:24px;height:24px;fill:currentColor}
@@ -1065,8 +1095,11 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .watch h1{margin:14px 0 10px;font-size:20px}
 .row{display:flex;gap:10px;margin-bottom:12px}.row img{width:168px;aspect-ratio:16/9;object-fit:cover;border-radius:8px;flex:none;background:var(--line)}
 .row h3{font-size:14px;margin:0 0 3px;font-weight:600;line-height:1.3}
-.list{background:var(--card);border-radius:12px;box-shadow:0 0 0 1px var(--line)}
-.list>div{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}.list>div:first-child{border:0}
+/* lists (Channels, History): like the TV's, each row a rounded box, with a thin outline always showing (a phone has no
+   pointer to highlight them); the row under the pointer or holding the keyboard focus fills in */
+.list{display:flex;flex-direction:column;gap:8px}
+.list>div{display:flex;align-items:center;gap:12px;padding:10px 14px;border-radius:14px;box-shadow:0 0 0 1px var(--line);transition:background .12s}
+.list>div:hover,.list>div:focus-within{background:var(--card)}
 .list .grow{flex:1;min-width:0}
 .err{background:#fff0e6;color:#a33a00;padding:10px 14px;border-radius:10px;margin-bottom:16px}
 @media (prefers-color-scheme:dark){:root:not([data-theme=light]) .err{background:#3a1f10;color:#ffb38a}}
@@ -1096,14 +1129,17 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .pedit .acts{display:flex;gap:14px;align-items:center;margin-top:26px}
 .pedit .rm{display:block;margin-top:36px;color:#c92a2a}
 .center{text-align:center}
+.pback{position:fixed;top:max(16px,env(safe-area-inset-top));left:max(16px,env(safe-area-inset-left));display:inline-flex;align-items:center;
+  padding:7px 16px;border-radius:999px;background:var(--card);box-shadow:0 0 0 1px var(--line);font-weight:600}.pback:hover{color:var(--accent)}@media(max-width:720px){.pback+.center>.logo{margin-top:68px!important}}   /* room for Back on a phone */
 .why{color:var(--accent);font-size:12px;margin-top:2px}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media(max-width:720px){header{flex-wrap:wrap;padding:10px 16px;row-gap:10px}header>.av,.side,.burger{display:none}header .theme{display:grid;margin-left:auto}
   header .logo{width:auto;padding:0}
   .rib{display:flex;gap:8px;order:2;flex-basis:calc(100% + 32px);margin:0 -16px;padding:0 16px;overflow-x:auto;scrollbar-width:none}
   .rib::-webkit-scrollbar{display:none}
-  .rib a{display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:9px;background:var(--card);
-    box-shadow:0 0 0 1px var(--line);font-size:14px;font-weight:550;white-space:nowrap}
+  /* the chips along the top, like the YouTube app's: flat grey, slightly rounded, medium-weight text */
+  .rib a{display:flex;align-items:center;gap:6px;height:32px;padding:0 12px;border-radius:8px;
+    background:color-mix(in srgb,var(--fg) 9%,var(--bg));font-size:15px;font-weight:500;white-space:nowrap}
   .rib a.on{background:var(--fg);color:var(--bg);box-shadow:none}
   .rib .av{width:20px;height:20px;font-size:11px}
   form.go{order:3;flex-basis:100%;max-width:none}
@@ -1117,75 +1153,151 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
   .grid{grid-template-columns:1fr 1fr;gap:16px 10px}.row img{width:130px}
   .sgrid{grid-template-columns:1fr 1fr;gap:12px 10px}}
 @media(max-width:440px){.grid{grid-template-columns:1fr}}
+/* Settings, like the YouTube TV app's: names down the left in groups; the selected one centred on the right with a big
+   title, one short line and wide round buttons (a phone puts them one under the other) */
+.sets{display:grid;grid-template-columns:minmax(0,280px) minmax(0,1fr);gap:24px;align-items:start;max-width:1040px}
+.slist{display:flex;flex-direction:column;gap:2px;padding-right:12px;border-right:1px solid var(--line)}
+.slist h4{font-size:12px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:14px 14px 6px;font-weight:600}
+.slist h4:first-child{margin-top:2px}
+.srow{display:block;width:100%;text-align:left;border:0;border-radius:10px;padding:9px 14px;background:none;color:var(--fg);font:inherit;font-weight:500;cursor:pointer}
+.srow:hover,.srow.sel{background:var(--card)}
+.spane{display:flex;flex-direction:column;align-items:center;text-align:center;padding:40px 16px 0;min-width:0}
+.spane h2{font-size:26px;line-height:1.15;margin:0 0 10px}.spane>p{margin:0 0 24px;max-width:46ch;color:var(--muted)}
+.sopts,.spane .sbtns,.spane .sask{display:flex;flex-direction:column;gap:8px;width:300px;max-width:100%}
+.sopt,.spane .btn{display:flex;justify-content:space-between;align-items:center;width:100%;min-height:44px;padding:0 22px;border:0;border-radius:999px;
+  background:var(--card);box-shadow:0 0 0 1px var(--line);color:var(--fg);font:inherit;font-weight:500;cursor:pointer;text-align:left}
+.spane .btn{justify-content:center}.sopt.on:after{content:"✓";color:var(--accent);font-weight:700}
+.sedit{width:300px;max-width:100%}.sedit i{font-style:normal;color:var(--muted)}.sedit span{margin-right:auto;padding-left:.3em}
+.spane .sask p{margin:0 0 4px;color:var(--muted)}.spane .sask b{font-weight:500}
+.shid{display:flex;align-items:center;gap:12px;width:380px;max-width:100%;padding:8px 0;border-top:1px solid var(--line);text-align:left}
+.shid:first-of-type{border-top:0}
+.shid .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.shid.back .nm{color:var(--muted);text-decoration:line-through}
+.shid .btn{width:auto;min-height:34px;padding:0 16px;font-size:13px}
+.sdone{color:#37b24d;font-weight:600}
+.sver{display:grid;grid-template-columns:auto auto;gap:12px 44px;margin:4px 0;text-align:left;font-variant-numeric:tabular-nums}
+.sver span{color:var(--muted)}.sver b{font-weight:500;overflow-wrap:anywhere}
+.sbtns[hidden],.sask[hidden],.sopts[hidden],.sopt[hidden],.spane[hidden]{display:none}.bar .sask{flex-basis:100%}.bar .sask p{margin:0 0 10px}
+form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!important;box-shadow:none!important}
+@media(max-width:720px){.sets{grid-template-columns:1fr}.slist{border:0;padding:0}.spane{padding-top:16px}}
 """
 
 # Extra styles when the page is shown by the YakTube TV app (its browser says "YakTubeTV").
 TV_CSS = """<style>
 :root,:root[data-theme],:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
-body{font-size:17px}main{padding:18px 28px 40px 120px;max-width:none}
+body{font-size:17px}main{padding:18px 28px 40px 104px;max-width:none}
 header,.side,.rib,.bot{display:none!important}.shell{display:block}
-/* the rail: icons down the left; it widens with names when the remote moves into it */
-.tvside{display:flex;flex-direction:column;gap:2px;position:fixed;left:0;top:0;bottom:0;z-index:20;width:96px;padding:28px 16px;
+/* the rail: icons down the left; it widens with names when the remote moves into it. Sized like the YouTube app on
+   Google TV: about 80 wide closed and 240 open, names at 15px and the profile name at 17px, rows 40 apart with
+   22px icons (a selected row's highlight fills it). Icons and pictures sit centred on the closed rail. */
+.tvside{display:flex;flex-direction:column;gap:2px;position:fixed;left:0;top:0;bottom:0;z-index:20;width:80px;padding:28px 12px;
   overflow:hidden;background:linear-gradient(90deg,#0a0a0a 70%,rgba(10,10,10,.92));transition:width .15s}
-.tvside:focus-within{width:320px;box-shadow:30px 0 80px rgba(0,0,0,.7)}
-.tvside a{display:flex;align-items:center;gap:22px;min-height:52px;padding:0 16px;border-radius:999px;white-space:nowrap;color:#aaa;flex:none}
-.tvside a svg{width:30px;height:30px}.tvside a.on{color:#fff}.tvside a.on svg{color:var(--accent)}
+.tvside:focus-within{width:240px;box-shadow:30px 0 80px rgba(0,0,0,.7)}
+.tvside a{display:flex;align-items:center;gap:14px;min-height:38px;padding:0 17px;border-radius:999px;white-space:nowrap;color:#aaa;flex:none;font-size:15px;font-weight:500}
+.tvside a span{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.tvside a svg{width:22px;height:22px;flex:none}.tvside a.on{color:#fff}.tvside a.on svg{color:var(--accent)}
 .tvside a span,.tvside h4{opacity:0;transition:opacity .12s}.tvside:focus-within a span,.tvside:focus-within h4{opacity:1}
 .tvside a:focus{background:#f2f2f2;color:#111;outline:none!important}.tvside a:focus svg{color:#111}
-.tvside h4{margin:18px 16px 6px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#777;white-space:nowrap}
-.tvside .av{width:30px;height:30px;font-size:14px;font-style:normal;flex:none}
-.tvside .me{min-height:62px;margin-bottom:10px}.tvside .me span{line-height:1.2}.tvside .me small{display:block;font-size:12px;color:#888}
-.tvside a.me:focus small{color:#555}.tvside h4{border-top:1px solid #2a2a2a;padding-top:16px}
+.tvside hr{border:0;border-top:1px solid #2a2a2a;margin:5px 13px;flex:none}.tvside .gap{display:block;height:8px;flex:none}
+.tvside h4{margin:2px 13px 4px;font-size:13px;text-transform:uppercase;letter-spacing:.08em;color:#777;white-space:nowrap}
+.tvside .av{width:22px;height:22px;font-size:11px;font-style:normal;flex:none}.tvside .me .av{width:30px;height:30px;font-size:14px}
+.tvside .me{min-height:48px;margin-bottom:6px;padding:0 13px;gap:10px}.tvside .me span{line-height:1.2;font-size:17px}.tvside .me small{display:block;font-size:12px;color:#888}
+.tvside a.me:focus small{color:#555}
 .bare .tvside{display:none}#rt #sr{display:none!important}   /* Shorts: no Share button on the TV (beats Shorts' own button style) */.bare main{padding:0}
 .go.big{max-width:720px;margin:12vh auto 0}.go.big input{font-size:26px;padding:16px 26px}
 /* Home: rows you move along with Left / Right, the focused video's details above them */
-.trow{margin:0 0 2px;scroll-margin-top:6px}.trow h2{font-size:15px;margin:0 0 0 8px;font-weight:600;color:#ddd}
+/* Home's top line, like the YouTube TV app's: a wide grey search pill on the left (it opens Search), the logo on the right */
+.tvhead{display:flex;align-items:center;justify-content:space-between;margin:4px 0 14px 8px}
+.tvsearch{display:flex;align-items:center;gap:12px;width:calc(100vw * 728 / 1920);height:38px;padding:0 18px;border-radius:999px;
+  background:#8c8c8c;color:#1a1a1a;font-size:18px;font-weight:500}.tvsearch svg{width:20px;height:20px;fill:currentColor}
+.tvsearch:focus{background:#f2f2f2;outline:none!important}
+.tvhead .logo{font-size:24px;color:#f2f2f2}.tvhead .logo b{color:#ff6b2c}
+.trow{margin:0 0 2px;scroll-margin-top:6px}.trow h2{font-size:17px;margin:0 0 0 8px;font-weight:500;color:#f1f1f1}   /* like the YouTube TV app's: 17px, medium, near-white */
 /* each row has room around it, so the selected card's border and zoom aren't cut off */
 .strip{position:relative;display:flex;gap:18px;overflow-x:auto;scrollbar-width:none;padding:26px 30px 30px;margin:0 -22px}
 .strip::-webkit-scrollbar{display:none}
-/* YouTube's TV app on a 1080p screen: video tiles 426 x 240, the top (featured) row 640 x 360; Shorts tall (9:16).
-   Sizes follow the screen width, so a 4K TV gets the same layout, twice as sharp. */
-.strip .card{flex:0 0 calc(100vw * 426 / 1920)}.trow:first-of-type .strip .card{flex-basis:calc(100vw * 640 / 1920)}
+/* Every row the same: video tiles 532 x 299 on a 1080p screen (between YouTube's 426 and its featured 640); Shorts tall
+   (9:16). Sizes follow the screen width, so a 4K TV gets the same layout, twice as sharp. */
+.strip .card{flex:0 0 calc(100vw * 532 / 1920)}
 .strip .scard{flex:0 0 calc(100vw * 240 / 1920)}
 .strip>a{min-width:0}   /* every card exactly that wide, however long its text */
-/* selected: 10% bigger, white outline, drop shadow, drawn over its neighbours */
-.strip>a{position:relative;transition:transform .12s,box-shadow .12s}
-.strip>a:focus{transform:scale(1.1)!important;z-index:2;outline:3px solid #fff!important;outline-offset:4px;border-radius:12px;
-  box-shadow:0 14px 34px rgba(0,0,0,.65)}
+/* selected, like the YouTube TV app: a white ring round the picture only (with a thin dark gap), and the title turns white;
+   the tile also gets 10% wider, pushing the next ones along (same height: see below) */
+.strip>a{position:relative;transition:flex-basis .15s}
+.strip>a:focus{transform:none!important;outline:none!important;box-shadow:none}
+.strip>a:focus img{box-shadow:0 0 0 3px #111,0 0 0 6px #fff}
+.strip .card:focus{flex-basis:calc(100vw * 532 * 1.1 / 1920)}
+.strip .scard:focus{flex-basis:calc(100vw * 240 * 1.1 / 1920)}
 .strip .dur{font-size:11px;padding:0 5px}
 .strip .scard img{aspect-ratio:9/16;border-radius:10px}
+/* every picture keeps one height, so a selected tile only gets wider (its picture trimmed a little top and bottom) and
+   the rows below never move */
+.strip .card img{aspect-ratio:auto;height:calc(100vw * 532 / 1920 * 9 / 16)}.strip .scard img{aspect-ratio:auto;height:calc(100vw * 240 / 1920 * 16 / 9)}
 /* the details sit under each picture, always the same height, so nothing moves when the selection changes */
-.strip .card h3,.strip .scard h3{-webkit-line-clamp:2;height:2.6em;line-height:1.3;font-size:13px;font-weight:500;margin:8px 0 2px;color:#ddd}
-.strip .card .meta,.strip .scard .meta,.strip .why{display:block;font-size:11.5px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#999}
+.strip .card h3,.strip .scard h3{-webkit-line-clamp:2;height:2.6em;line-height:1.3;font-size:18px;font-weight:500;margin:10px 0 2px;color:#aaa}   /* YouTube TV: titles 18, details 14 */
+.strip .card .meta,.strip .scard .meta,.strip .why{display:block;font-size:14px;line-height:1.4;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#999}
 .strip .why{visibility:hidden;color:var(--accent)}.strip .card:focus .why{visibility:visible}
-.strip .card:focus h3,.strip .scard:focus h3{color:var(--accent)}
+.strip .card:focus h3,.strip .scard:focus h3{color:#fff}.strip>a:focus .meta{color:#bbb}
 .scard{transition:transform .1s}.scard:focus{transform:scale(1.06)}.scard:focus h3{color:var(--accent)}
 a:focus,button:focus,input:focus,iframe:focus{outline:4px solid #fff!important;outline-offset:3px;border-radius:10px}
+/* Channels and History lists: the whole row is the selection, a rounded box with a white ring (drawn with box-shadow,
+   as some TV browsers and older Safari draw outlines square). Its picture and title both open it, so they need no ring
+   of their own; the button on the right (✕, Unsubscribe) turns white when it's the one selected. */
+.list{background:none;box-shadow:none;gap:2px}.list>div{border-top:0;border-radius:14px;padding:10px 14px;box-shadow:none;background:none}
+.list>div:focus-within{background:#262628;box-shadow:0 0 0 3px #fff}
+.list a:focus{outline:none!important;box-shadow:none!important}
+.list button:focus{outline:none!important;box-shadow:none!important;background:#f2f2f2!important;color:#111!important;border-radius:999px}
 .card{transition:transform .1s}.card:focus{transform:scale(1.05)}.card:focus h3{color:var(--accent)}
 .grid{grid-template-columns:repeat(4,1fr)}
 a[target=_blank],.imp{display:none}
 .watch{grid-template-columns:1fr}.player{aspect-ratio:auto;height:100vh;overflow:hidden}.tvp{position:relative}
-.tvbar{position:absolute;left:0;right:0;bottom:0;display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:48px 22px 18px;
-border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.75));transition:opacity .5s}.tvbar.hide{opacity:0}
-.tvsk{display:flex;align-items:center;gap:14px;flex-basis:100%;margin-bottom:10px;font-size:14px;font-weight:600;color:#eee;text-shadow:0 1px 2px #000}
-#sk{flex:1;height:18px;display:flex;align-items:center;border-radius:9px;outline:none!important}#sk i{position:relative;display:block;width:100%;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}
+/* The player's controls, laid out like the YouTube app on a TV: title and channel top left; the times over the progress
+   bar; under it Subscribe on the left, back 10s / play / forward 10s in the middle, and thumbs, Watch later and ⚙ on
+   the right. Round dark buttons; the selected one turns white. */
+.tvbar{position:absolute;left:0;right:0;bottom:0;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;row-gap:16px;
+  padding:80px 92px 30px;border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.7));transition:opacity .5s}.tvbar.hide{opacity:0}
+.tvsk{grid-column:1/-1;display:grid;grid-template-columns:1fr 1fr;row-gap:6px;font-size:13px;font-weight:600;color:#eee;text-shadow:0 1px 2px #000}
+#t1{grid-row:1;grid-column:2;justify-self:end}#sk{grid-column:1/-1}
+#sk{height:18px;display:flex;align-items:center;border-radius:9px;outline:none!important}#sk i{position:relative;display:block;width:100%;height:4px;border-radius:2px;background:rgba(255,255,255,.3)}
 #sk b{position:absolute;left:0;top:0;bottom:0;border-radius:2px;background:#f03}
 #sk b:after{content:"";position:absolute;right:-8px;top:50%;width:16px;height:16px;margin-top:-8px;border-radius:50%;background:#f03;transform:scale(0);transition:transform .12s}
 #sk:focus i{height:8px}#sk:focus b:after{transform:scale(1);box-shadow:0 0 0 4px rgba(255,255,255,.85)}
-.tvtop{position:absolute;left:0;right:0;top:0;padding:22px 28px 60px;background:linear-gradient(rgba(0,0,0,.75),transparent);transition:opacity .5s;pointer-events:none}
-.tvtop b{display:block;font-size:24px;line-height:1.25;max-width:80%;text-shadow:0 1px 3px #000}.tvtop span{display:block;margin-top:4px;font-size:15px;color:#ddd;text-shadow:0 1px 2px #000}
+.tvl,.tvc,.tvr{display:flex;align-items:center;gap:10px}.tvl{justify-self:start}.tvc{gap:14px}.tvr{justify-self:end}
+.tvtop{position:absolute;left:0;right:0;top:0;padding:30px 92px 70px;background:linear-gradient(rgba(0,0,0,.7),transparent);transition:opacity .5s;pointer-events:none}
+.tvtop b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:22px;line-height:1.25;max-width:72%;text-shadow:0 1px 3px #000}
+.tvtop span{display:block;margin-top:6px;font-size:13px;color:#ddd;text-shadow:0 1px 2px #000}
 .tvbar.hide~.tvtop{opacity:0}
-.tvgm{position:absolute;right:22px;bottom:64px;display:flex;flex-direction:column;gap:6px;min-width:230px;padding:12px;border-radius:16px;
+.tvbar button,.tvbar button.btn,.tvnx button{font:inherit;font-size:14px;font-weight:600;height:36px;padding:0 18px;border-radius:999px;border:0;box-shadow:none;
+  background:rgba(50,50,50,.85);color:#fff;display:inline-grid;place-items:center;grid-auto-flow:column;gap:6px}
+.tvbar button:focus,.tvbar button.btn:focus,.tvnx button:focus{background:#f2f2f2;color:#111;outline:none!important}
+.tvbar svg{width:20px;height:20px;fill:currentColor}
+.tvc button,#gs{width:36px;padding:0}#pp{width:46px;height:46px}#pp svg{width:24px;height:24px}
+.tvbar form{display:inline}
+/* Settings on the TV: dark round buttons; the selected setting and button turn white, like everywhere else */
+.slist{border-color:#262626}.srow{font-size:16px}.srow.sel{background:#333}.spane h2{font-size:30px}.spane>p{color:#aaa}
+.sopt,.spane .btn{background:#2c2c2e;box-shadow:none;color:#f2f2f2}
+.srow:focus,.sopt:focus,.spane .btn:focus{background:#f2f2f2!important;color:#111!important;outline:none!important}.sopt:focus i{color:#111}
+.tvbar .rate{display:flex;background:rgba(50,50,50,.85);border-radius:999px;box-shadow:none;overflow:hidden}
+.tvbar .rate button{width:44px;padding:0;border-radius:999px;background:none}.tvbar .rate button.on{color:var(--accent)}
+.tvbar .rate button:focus{background:#f2f2f2;color:#111}.tvbar .rate button.on:focus{color:var(--accent)}
+.tvgm{position:absolute;right:92px;bottom:84px;display:flex;flex-direction:column;gap:6px;min-width:230px;padding:12px;border-radius:16px;
   background:rgba(22,22,22,.96);box-shadow:0 0 0 1px var(--line),0 12px 40px rgba(0,0,0,.6)}.tvgm[hidden]{display:none}
-.tvbar .tvgm button{text-align:left;font-size:15px;padding:9px 16px;border-radius:10px;background:none}
+.tvbar .tvgm button{display:block;width:auto;height:auto;text-align:left;font-size:15px;padding:9px 16px;border-radius:10px;background:none}
 .tvbar .tvgm button:focus{background:var(--fg);color:var(--bg)}.tvgm .meta{padding:4px 16px 0;font-size:12px;color:#aaa}
-#gs{position:relative}#gs.dot:after{content:"";position:absolute;top:1px;right:3px;width:7px;height:7px;border-radius:50%;background:var(--accent)}
-.tvbar form{display:inline}.tvbar .rate{background:var(--card);box-shadow:none}.tvbar .rate button{border-radius:0;background:none;padding:3px 12px}
-.tvbar .rate button.on{color:var(--accent)}.tvbar .rate svg{width:16px;height:16px;vertical-align:-3px}
-.tvbar button,.tvnx button{font:inherit;font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;border:0;background:var(--card);color:var(--fg)}
-.tvbar button:focus,.tvnx button:focus{background:var(--fg);color:var(--bg);outline-width:2px!important;outline-offset:2px}.tvbar .meta{margin-left:6px;font-size:12px;color:#eee;text-shadow:0 1px 2px #000}
-.tvnx{position:absolute;right:28px;bottom:84px;max-width:440px;padding:16px 18px;border-radius:14px;background:rgba(20,20,20,.94);box-shadow:0 0 0 1px var(--line)}
-.tvnx>b{display:block;margin:4px 0 12px;font-size:16px;line-height:1.3}.tvnx button{margin-right:8px;font-size:14px;padding:5px 14px}
+#gs{position:relative}#gs.dot:after{content:"";position:absolute;top:2px;right:2px;width:8px;height:8px;border-radius:50%;background:var(--accent)}
+.tvnx{position:absolute;right:92px;bottom:150px;max-width:440px;padding:16px 18px;border-radius:14px;background:rgba(20,20,20,.94);box-shadow:0 0 0 1px var(--line)}
+.tvnx>b{display:block;margin:4px 0 12px;font-size:16px;line-height:1.3}.tvnx button{display:inline-grid;margin-right:8px}
+/* the channel: its letter in a circle on the left of the controls; OK opens a panel on the right (like the YouTube app's)
+   with Subscribe, Go to channel and Don't recommend channel */
+.tvbar #chb{width:42px;height:42px;padding:0;border-radius:50%;background:none}.tvbar #chb .av{width:36px;height:36px;font-size:16px;font-style:normal}
+.tvbar #chb:focus{background:#f2f2f2}
+.tvcp{position:fixed;top:24px;right:24px;bottom:24px;width:300px;z-index:30;display:flex;flex-direction:column;align-items:center;gap:8px;
+  padding:34px 18px;border-radius:20px;background:#1c1c1e;box-shadow:0 12px 40px rgba(0,0,0,.6)}.tvcp[hidden]{display:none}
+.tvcp>.av{width:120px;height:120px;font-size:54px;font-style:normal;margin-bottom:12px}
+.tvcp>b{font-size:18px;line-height:1.3;text-align:center;margin-bottom:14px}
+.tvcp form{display:block;width:100%}
+.tvbar .tvcp button,.tvbar .tvcp button.btn,.tvbar .tvcp a{display:block;width:100%;height:auto;padding:12px 16px;border-radius:10px;text-align:left;
+  font-size:15px;font-weight:600;line-height:1.3;background:#2c2c2e;color:#fff;box-shadow:none}
+.tvbar .tvcp button:focus,.tvbar .tvcp button.btn:focus,.tvbar .tvcp a:focus{background:#f2f2f2;color:#111;outline:none!important}
 /* hold OK on a video: a menu of things to do with it, over a dimmed screen */
 .tvlm{position:fixed;inset:0;z-index:50;display:grid;place-items:center;background:rgba(0,0,0,.6)}
 .tvlm>div{display:flex;flex-direction:column;gap:4px;width:420px;padding:14px;border-radius:18px;background:#1c1c1e;
@@ -1196,6 +1308,23 @@ border-radius:0 0 12px 12px;background:linear-gradient(transparent,rgba(0,0,0,.7
 .tvlm button:focus{background:var(--fg);color:var(--bg);outline:none!important}
 .tvtoast{position:fixed;left:50%;bottom:48px;transform:translateX(-50%);z-index:51;padding:10px 22px;border-radius:999px;
   background:#1c1c1e;color:#fff;font-size:16px;box-shadow:0 0 0 1px var(--line),0 8px 24px rgba(0,0,0,.6)}
+
+/* Shorts, laid out like the YouTube app on a TV: the Short in the middle with rounded corners, its title and channel
+   in a column to the right, the thumbs as plain icons stacked near the bottom, and a "Press down" hint top right
+   (in place of the ▲ ▼ buttons). "#sh" in front of each so these beat the Shorts page's own styles. */
+#sh #pl{border-radius:16px;overflow:hidden;box-shadow:0 0 0 3px #3a3a3c}
+#sh #info,#sh #rt{left:calc(50% + 28.125vh + 44px);right:32px;width:auto;transform:none}
+#sh #info{top:43%;bottom:auto;padding:0;background:none}
+#sh #info b{font-size:18px;line-height:1.3;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+#sh #info span{display:block;margin-top:10px;font-size:15px;opacity:1;color:#ddd;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#sh #rt{top:auto;bottom:8%;gap:8px;margin-left:-11px}
+#sh #rt button{width:46px;height:46px;background:none;color:#fff}#sh #rt svg{width:24px;height:24px}
+#sh #rt button.on{background:none;color:var(--accent)}
+#sh #rt button:focus{background:#f2f2f2;color:#111;outline:none!important}#sh #rt button.on:focus{color:var(--accent)}
+#sh #ud{display:none}
+#sh #hint{display:flex;position:absolute;top:32px;right:32px;align-items:center;gap:14px;padding:14px 20px 14px 16px;border-radius:12px;
+  background:#1f1f21;font-size:15px;font-weight:600;z-index:2;pointer-events:none}
+#sh #hint svg{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:2.4;stroke-linecap:round;stroke-linejoin:round}
 </style>"""
 # Both players call the function yakTrack() returns on every update from YouTube. A video goes into History once it
 # has really played for 10 seconds (not when its page opens); after that the position is saved every 15 seconds,
@@ -1212,10 +1341,13 @@ else if(Math.abs(T-sent)>=15||(!playing&&Math.abs(T-sent)>=1))send(0)}}</script>
 # navigation can't see). Our own buttons drive it through YouTube's embed commands (enablejsapi).
 TV_PLAYER = """<div class="tvp"><div id="pl" class="player"></div>
 <div class="tvbar"><div class="tvsk"><span id="t0">0:00</span><div id="sk" tabindex="0" role="slider" aria-label="Seek"><i><b></b></i></div><span id="t1"></span></div>
-<button id="pp">❚❚ Pause</button><button data-k="-10">⟲ 10s</button><button data-k="10">10s ⟳</button>__ACTS__
-<button id="gs" aria-haspopup="menu" aria-expanded="false">⚙ Settings</button>
+<div class="tvl">__CHAN__</div>
+<div class="tvc"><button data-k="-10" aria-label="Back 10 seconds"><svg viewBox="0 0 24 24"><path d="M12 5V2L7 6l5 4V7a6 6 0 1 1-6 6H4a8 8 0 1 0 8-8z"/><text x="12" y="16" font-size="7" font-weight="700" text-anchor="middle">10</text></svg></button>
+<button id="pp" aria-label="Pause"><svg viewBox="0 0 24 24"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg></button>
+<button data-k="10" aria-label="Forward 10 seconds"><svg viewBox="0 0 24 24"><path d="M12 5V2l5 4-5 4V7a6 6 0 1 0 6 6h2a8 8 0 1 1-8-8z"/><text x="12" y="16" font-size="7" font-weight="700" text-anchor="middle">10</text></svg></button></div>
+<div class="tvr">__ACTS__<button id="gs" aria-haspopup="menu" aria-expanded="false" aria-label="Settings"><svg viewBox="0 0 24 24"><path fill-rule="evenodd" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.6 7.6 0 0 0 1.7-1l2.5 1 2-3.5zM12 15.3a3.3 3.3 0 1 1 0-6.6 3.3 3.3 0 0 1 0 6.6z"/></svg></button>
 <div id="gm" class="tvgm" role="menu" hidden><button id="cc">Captions off</button><button id="sp">Speed 1×</button><button id="ql">Quality Auto</button>
-<button id="ap">Autoplay off</button><span id="tm" class="meta"></span></div></div>
+<span id="tm" class="meta"></span></div></div></div>
 <div class="tvtop">__TOP__</div>
 <div id="nx" class="tvnx" hidden><span class="meta">Up next in <span id="nxn">10</span></span><b id="nxt"></b>
 <button id="nxg">Play now</button><button id="nxc">Cancel</button></div></div>
@@ -1238,13 +1370,12 @@ var QL={tiny:"144p",small:"240p",medium:"360p",large:"480p",hd720:"720p",hd1080:
 function cmd(fn,a){f.contentWindow.postMessage(JSON.stringify({event:"command",func:fn,args:a||[],id:1,channel:"widget"}),"*")}
 var hello=setInterval(function(){f.contentWindow&&f.contentWindow.postMessage(JSON.stringify({event:"listening",id:1,channel:"widget"}),"*")},400);
 function tf(x){x=Math.max(0,Math.floor(x));var h=Math.floor(x/3600),m=Math.floor(x/60)%60,s=("0"+x%60).slice(-2);return(h?h+":"+("0"+m).slice(-2):m)+":"+s}
-function upd(){$("pp").textContent=st.s==1||st.s==3?"❚❚ Pause":"▶ Play";$("tm").textContent=st.q?"playing "+(QL[st.q]||st.q):"";
+function upd(){var on=st.s==1||st.s==3,pp=$("pp");if(pp.dataset.on!=String(on)){pp.dataset.on=on;pp.setAttribute("aria-label",on?"Pause":"Play");
+pp.innerHTML='<svg viewBox="0 0 24 24"><path d="'+(on?"M6 5h4v14H6zm8 0h4v14h-4z":"M8 5v14l11-7z")+'"/></svg>'}$("tm").textContent=st.q?"playing "+(QL[st.q]||st.q):"";
 $("t0").textContent=tf(st.t);$("t1").textContent=st.d?tf(st.d):"";st.at=Date.now()}
 // Progress bar: moves smoothly between the player's reports. Select it with the remote and Left / Right jump 10s
-// (hold to keep going), like the YouTube app on a TV.
+// (hold to keep going), like the YouTube app on a TV. Its keys are handled with the Settings menu's, below.
 (function draw(){var t=st.t+(st.s==1&&st.at?(Date.now()-st.at)/1000:0);$("sk").firstChild.firstChild.style.width=(st.d?Math.min(100,t/st.d*100):0)+"%";requestAnimationFrame(draw)})();
-$("sk").addEventListener("keydown",function(k){if(k.key=="ArrowLeft"||k.key=="ArrowRight"){k.preventDefault();k.stopImmediatePropagation();wake();seek(k.key=="ArrowRight"?10:-10)}
-else if(k.key=="Enter"){k.preventDefault();toggle()}});
 addEventListener("message",function(e){if(!/youtube/.test(e.origin))return;var m;try{m=JSON.parse(e.data)}catch(x){return}if(m.event=="onReady"||m.event=="initialDelivery")clearInterval(hello);
 var i=m.info||{},was=st.s;if("currentTime" in i)st.t=i.currentTime;if(i.duration)st.d=i.duration;if("playerState" in i)st.s=i.playerState;
 if(i.playbackQuality&&i.playbackQuality!="unknown")st.q=i.playbackQuality;
@@ -1254,18 +1385,16 @@ function ccoff(){if(!cc)cmd("setOption",["captions","track",{}])}  // off for go
 function toggle(){if(st.s==1||st.s==3){cmd("pauseVideo");st.s=2}else{cmd("playVideo");st.s=1}upd()}
 function seek(d){st.t=Math.min(Math.max(0,st.t+d),st.d||1e9);cmd("seekTo",[st.t,true]);upd()}
 $("pp").onclick=toggle;[].forEach.call(document.querySelectorAll("[data-k]"),function(b){b.onclick=function(){seek(+b.dataset.k)}});
-$("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("setOption",["captions","track",{languageCode:"en"}])}else ccoff();this.textContent="Captions "+(cc?"on":"off")};
+$("cc").onclick=function(){cc=!cc;if(cc){cmd("loadModule",["captions"]);cmd("setOption",["captions","track",{languageCode:"__HL__"}])}else ccoff();this.textContent="Captions "+(cc?"on":"off")};
 $("sp").onclick=function(){ri=(ri+1)%rates.length;cmd("setPlaybackRate",[rates[ri]]);this.textContent="Speed "+rates[ri]+"×"};
 addEventListener("keydown",function(k){var c=k.key;if(c=="MediaPlayPause"||c=="MediaPlay"||c=="MediaPause"){toggle();k.preventDefault()}
 else if(c=="MediaFastForward"){seek(10);k.preventDefault()}else if(c=="MediaRewind"){seek(-10);k.preventDefault()}});
 var bar=document.querySelector(".tvbar");[].forEach.call(document.querySelectorAll(".tvbar button,.tvnx button,#sk"),function(b){b.scrollIntoView=function(){}});
 function home(){var y=$("pl").getBoundingClientRect().top+scrollY;if(Math.abs(scrollY-y)>2)scrollTo(0,y)}
 bar.addEventListener("focusin",home);$("nx").addEventListener("focusin",home);addEventListener("load",home);
-// Autoplay (off unless switched on; remembered on this TV): when a video ends, count down 10s, then play the
+// Autoplay (off unless switched on in Settings; remembered on this TV): when a video ends, count down 10s, then play the
 // first "Up next" video you haven't seen. Cancel stops it.
 var ap=0;try{ap=localStorage.yakap=="1"?1:0}catch(x){}
-$("ap").textContent="Autoplay "+(ap?"on":"off");
-$("ap").onclick=function(){ap=1-ap;try{localStorage.yakap=ap}catch(x){}this.textContent="Autoplay "+(ap?"on":"off");if(!ap)stopnx()};
 var nx=0;function stopnx(){clearTimeout(nx);nx=0;$("nx").hidden=true}
 function ended(){var a=document.querySelector("#upnext a.row:not(.seen)")||document.querySelector("#upnext a.row"),n=10;if(!ap||!a||nx)return;
 $("nxt").textContent=a.querySelector("h3").textContent;$("nx").hidden=false;$("nxg").onclick=function(){location.href=a.href};$("nxg").focus();
@@ -1273,23 +1402,50 @@ $("nxt").textContent=a.querySelector("h3").textContent;$("nx").hidden=false;$("n
 $("nxc").onclick=function(){stopnx();$("pp").focus()};
 // The buttons fade out after 5s of no remote presses while playing; the next press only brings them back
 // (so OK doesn't also pause). Play/pause and fast-forward/rewind keys always act straight away.
-var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&$("gm").hidden&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
+var tmr;function wake(){bar.classList.remove("hide");clearTimeout(tmr);tmr=setTimeout(function(){if(st.s==1&&$("gm").hidden&&(!$("cp")||$("cp").hidden)&&bar.contains(document.activeElement))bar.classList.add("hide")},5000)}
 addEventListener("keydown",function(k){var hid=bar.classList.contains("hide");wake();
 if(hid&&!/^Media/.test(k.key)){k.preventDefault();k.stopImmediatePropagation()}},true);
-// Settings (⚙): captions, speed, quality and autoplay, in a small menu above the button. Up / Down move, OK changes
+// Settings (⚙): captions, speed and quality, in a small menu above the button. Up / Down move, OK changes
 // one, Left or Back closes it. While it's open the controls don't fade. A dot on ⚙ means something isn't the usual.
 var gm=$("gm"),gs=$("gs"),gl=[].slice.call(gm.querySelectorAll("button"));
 function mark(){gs.classList.toggle("dot",!!(cc||ri||qi))}
-function openm(){gm.hidden=false;gs.setAttribute("aria-expanded","true");gl[0].focus();wake();
-  if(!window.__yakm&&window.yakBack){window.__yakm=1;var ob=window.yakBack;window.yakBack=function(){if(!gm.hidden){shut();return true}return ob()}}}
+function hookb(){if(!window.__yakm&&window.yakBack){window.__yakm=1;var ob=window.yakBack;
+  window.yakBack=function(){if(!gm.hidden){shut();return true}if(cp&&!cp.hidden){shutc();return true}return ob()}}}
+function openm(){gm.hidden=false;gs.setAttribute("aria-expanded","true");gl[0].focus();wake();hookb()}
 function shut(){gm.hidden=true;gs.setAttribute("aria-expanded","false");gs.focus();wake()}
 gs.onclick=function(){gm.hidden?openm():shut()};
 gm.addEventListener("click",function(){setTimeout(mark)});
-gm.addEventListener("keydown",function(k){var d=k.key,i=gl.indexOf(document.activeElement);
-  if(d=="ArrowUp"||d=="ArrowDown"){k.preventDefault();k.stopImmediatePropagation();var n=gl[i+(d=="ArrowDown"?1:-1)];if(n)n.focus();wake()}
-  else if(d=="ArrowLeft"||d=="Escape"||d=="GoBack"||d=="BrowserBack"){k.preventDefault();k.stopImmediatePropagation();shut()}
-  else if(d=="ArrowRight"){k.preventDefault();k.stopImmediatePropagation()}});
+// The progress bar's and the menu's keys are caught on the window before anything else sees them: the TV app's
+// arrow-key navigation also listens there, and would otherwise move the selection as well (off the progress bar,
+// or one extra step in the menu, skipping every second item).
+addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,i;
+  function stop(){k.preventDefault();k.stopImmediatePropagation()}
+  if(a==$("sk")){if(d=="ArrowLeft"||d=="ArrowRight"){stop();wake();seek(d=="ArrowRight"?10:-10)}
+    else if(d=="Enter"){stop();toggle()}return}
+  // the control row (channel, back 10s, play, forward 10s, thumbs, Watch later, ⚙): Left / Right move along it and stop
+  // at its ends, rather than jumping to the nearest thing in that direction (which can be in the page below)
+  if((d=="ArrowLeft"||d=="ArrowRight")&&a.closest&&a.closest(".tvl,.tvc,.tvr")&&!a.closest("#gm,#cp")){stop();wake();
+    var row=[].filter.call(bar.querySelectorAll(".tvl button,.tvc button,.tvr button"),function(b){return b.offsetParent&&!b.closest("#gm,#cp")}),
+      n=row[row.indexOf(a)+(d=="ArrowRight"?1:-1)];if(n)n.focus();return}
+  if(gm.hidden||!gm.contains(a))return;i=gl.indexOf(a);
+  if(d=="ArrowUp"||d=="ArrowDown"){stop();var n=gl[i+(d=="ArrowDown"?1:-1)];if(n)n.focus();wake()}
+  else if(d=="ArrowLeft"||d=="Escape"||d=="GoBack"||d=="BrowserBack"){stop();shut()}
+  else if(d=="ArrowRight")stop()},true);
 gm.addEventListener("focusout",function(e){if(!gm.hidden&&!gm.contains(e.relatedTarget)&&e.relatedTarget!=gs){gm.hidden=true;gs.setAttribute("aria-expanded","false")}});
+// Channel panel: OK on the channel's circle opens it, Up / Down move, Left or Back closes it. Don't recommend channel
+// keeps it out of Home and New to you; pressed again it takes that back.
+var cp=$("cp"),chb=$("chb");function cl(){return[].slice.call(cp.querySelectorAll("button,a"))}
+function openc(){cp.hidden=false;chb.setAttribute("aria-expanded","true");cl()[0].focus();wake();hookb()}
+function shutc(){cp.hidden=true;chb.setAttribute("aria-expanded","false");chb.focus();wake()}
+if(cp){chb.onclick=function(){cp.hidden?openc():shutc()};
+  addEventListener("keydown",function(k){if(cp.hidden||!cp.contains(document.activeElement))return;var d=k.key,l=cl(),i=l.indexOf(document.activeElement);
+    function stop(){k.preventDefault();k.stopImmediatePropagation()}
+    if(d=="ArrowUp"||d=="ArrowDown"){stop();var n=l[i+(d=="ArrowDown"?1:-1)];if(n)n.focus();wake()}
+    else if(d=="ArrowLeft"||d=="Escape"||d=="GoBack"||d=="BrowserBack"){stop();shutc()}else if(d=="ArrowRight")stop()},true);
+  cp.addEventListener("focusout",function(e){if(!cp.hidden&&e.relatedTarget&&!cp.contains(e.relatedTarget)&&e.relatedTarget!=chb){cp.hidden=true;chb.setAttribute("aria-expanded","false")}});
+  var nr=$("cpn");if(nr)nr.onclick=function(){var on=nr.dataset.on=="1";
+    fetch("/hide",{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:"c="+nr.dataset.c+"&js=1"+(on?"&undo=1":"")});
+    nr.dataset.on=on?"0":"1";nr.textContent=on?"Don't recommend channel":"Recommend channel again"}}
 mark();if(back){openm();$("ql").focus()}else $("pp").focus()})()</script>"""
 APK = os.path.join(os.path.dirname(DB_PATH), "yaktube-tv.apk")
 
@@ -1346,6 +1502,7 @@ SHORTS_CSS = """<style>html,body{overflow:hidden;overscroll-behavior:none;backgr
 #pb:hover i,#pb.drag i{height:6px}#pb:hover b:after,#pb.drag b:after{transform:scale(1)}
 #tm{position:absolute;left:50%;bottom:34px;transform:translateX(-50%);font-size:15px;font-weight:600;
   text-shadow:0 1px 3px #000;pointer-events:none;z-index:3}
+#hint{display:none}
 #toast{position:absolute;left:50%;top:72px;transform:translateX(-50%);background:rgba(30,30,30,.92);padding:10px 18px;
   border-radius:999px;font-size:14px;pointer-events:none;z-index:4;white-space:nowrap}</style>"""
 SHORTS_JS = """<script>(function(){var L=__LIST__,i=0,seen={},$=function(x){return document.getElementById(x)};
@@ -1353,14 +1510,16 @@ function close(){var r=document.referrer;if(r&&r.indexOf(location.origin+"/")==0
 $("x").onclick=function(k){k.preventDefault();close()};
 // Remote / keyboard. With nothing selected: Up / Down change Short, OK pauses, Right goes to the buttons on the side
 // (thumbs, share), Left to ✕. On a button: OK presses it, Up / Down move between the side buttons, Left (or Down
-// from ✕) goes back to the Short.
+// from ✕) goes back to the Short. If the buttons are ever laid out in a row instead, Left / Right move along it (Left
+// off the first one goes back to the Short) and Up / Down still change Short.
 addEventListener("keydown",function(k){var d=k.key,a=document.activeElement,g;
   function stop(){k.preventDefault();k.stopImmediatePropagation()}
   if(a&&a!=document.body&&/^(A|BUTTON)$/.test(a.tagName)){
     if(d=="Enter"||d==" ")return;
-    g=a.closest("#rt,#ud");
-    if(g&&(d=="ArrowUp"||d=="ArrowDown")){stop();var l=[].filter.call(g.querySelectorAll("button"),function(b){return b.offsetParent}),
-      n=l[l.indexOf(a)+(d=="ArrowDown"?1:-1)];if(n)n.focus();return}
+    g=a.closest("#rt,#ud");var row=g&&getComputedStyle(g).flexDirection=="row";   // a row of buttons on the TV
+    if(row&&(d=="ArrowUp"||d=="ArrowDown")){stop();a.blur();(d=="ArrowDown"?next:prev)();return}   // still changes Short
+    if(g&&(row?d=="ArrowLeft"||d=="ArrowRight":d=="ArrowUp"||d=="ArrowDown")){stop();var l=[].filter.call(g.querySelectorAll("button"),function(b){return b.offsetParent}),
+      n=l[l.indexOf(a)+(d=="ArrowDown"||d=="ArrowRight"?1:-1)];if(n)n.focus();else if(row&&d=="ArrowLeft")a.blur();return}
     if((g&&g.id=="rt"&&d=="ArrowLeft")||(a.id=="x"&&(d=="ArrowDown"||d=="ArrowRight"))){stop();a.blur();return}
     if(d!="Escape"&&d!="MediaPlayPause")return}
   else if(d=="ArrowRight"&&!$("rt").hidden){stop();$("ru").focus();return}
@@ -1457,6 +1616,17 @@ def icon_png(n, tile=True):
     return png(n, n, rows)
 
 
+# The YakTube logo: the orange play badge (the same as the app icon and the TV app's banner), then "Yak" and "Tube" in
+# orange. Used wherever the name is shown; it scales with the font size.
+LOGO_BADGE = ('<svg viewBox="0 0 92 70" aria-hidden="true"><rect width="92" height="70" rx="16" fill="#d9480f"/>'
+              '<path d="M36 18v34l28-17z" fill="#fff"/></svg>')
+
+
+def logo(tag="span", extra=""):
+    end = tag.split()[0]
+    return f'<{tag} class="logo"{extra}>{LOGO_BADGE}<span>Yak<b>Tube</b></span></{end}>'
+
+
 MANIFEST = json.dumps({"name": "YakTube", "short_name": "YakTube", "start_url": "/", "display": "standalone",
                        "background_color": "#111111", "theme_color": "#111111",
                        "icons": [{"src": f"/icon-{n}.png", "sizes": f"{n}x{n}", "type": "image/png"} for n in (192, 512)]})
@@ -1538,6 +1708,16 @@ def later_button(vid, saved):
             f'<button class="btn ghost small">{"Saved ✓" if saved else "Watch later"}</button></form>')
 
 
+def ask_first(action, fields, label, sure, cls="btn"):
+    """A button for something that can't be undone. Pressed, it's replaced by "Are you sure?" with Clear and Cancel
+    (the page script, PAGE_JS); only Clear sends the form. `fields`: the form's hidden values."""
+    hidden = "".join(f'<input type="hidden" name="{k}" value="{e(v)}">' for k, v in fields.items())
+    return (f'<div class="sbtns"><button type="button" class="{cls}" data-ask>{label}</button></div>'
+            f'<form class="sask" method="post" action="{action}" hidden>{hidden}'
+            f'<p><b>{sure + " " if sure else ""}This can\'t be undone.</b></p><div class="sbtns"><button class="btn">Clear</button>'
+            f'<button type="button" class="btn ghost" data-no>Cancel</button></div></form>')
+
+
 def side_row(r, seen=False):
     meta = " · ".join(x for x in (r["channel_title"] or "", views(r["views"]), ago(r["published"])) if x)
     return (f'<a class="row{" seen" if seen else ""}" href="/watch?v={r["id"]}"><img loading="lazy" src="{thumb(r["id"])}" alt="">'
@@ -1569,6 +1749,14 @@ addEventListener("submit",k=>{var f=k.target;if(!f.classList.contains("js"))retu
 var b=new URLSearchParams(new FormData(f)),had=f.contains(document.activeElement);b.set("inline","1");f.querySelector("button").disabled=true;
 fetch(f.action,{method:"POST",body:b}).then(r=>r.ok?r.text():Promise.reject()).then(h=>{var d=document.createElement("div");
 d.innerHTML=h;var n=d.firstChild;f.replaceWith(n);if(had)n.querySelector("button").focus()}).catch(()=>{f.classList.remove("js");f.submit()})});
+// Things that can't be undone ask first. A [data-ask] button swaps itself for its "Are you sure?" form (Clear / Cancel).
+// A small form with data-sure (✕ on a History video) needs a second press: the first turns its button into data-sure.
+document.querySelectorAll("[data-ask]").forEach(b=>{var w=b.parentNode,q=w.nextElementSibling;
+b.onclick=()=>{q.hidden=false;w.hidden=true;q.querySelector("button").focus()};
+q.querySelector("[data-no]").onclick=()=>{q.hidden=true;w.hidden=false;b.focus()}});
+addEventListener("submit",k=>{var f=k.target,b=f.querySelector("button");if(!f.dataset.sure||f.classList.contains("sure"))return;
+k.preventDefault();f.classList.add("sure");var t=b.textContent;b.textContent=f.dataset.sure;
+b.addEventListener("blur",()=>{f.classList.remove("sure");b.textContent=t},{once:true})},true);
 var t=document.querySelector(".rib .on");if(t)t.parentNode.scrollLeft=t.offsetLeft-40</script>"""
 
 # Home only: note which cards were on screen for a second (sent in batches), and when you come back to Home with
@@ -1601,7 +1789,8 @@ if(rail.contains(a)){stop(k);if(d=="ArrowRight"){if(last&&document.contains(last
 else if(d!="ArrowLeft"){var l=[].slice.call(rail.querySelectorAll("a")),n=l[l.indexOf(a)+(d=="ArrowDown"?1:-1)];if(n){n.focus();n.scrollIntoView({block:"nearest"})}}return}
 if(a&&a.closest&&(r=a.closest(".trow"))){stop(k);var l=items(r),i=l.indexOf(a);
 if(d=="ArrowRight"){if(l[i+1])put(l[i+1])}else if(d=="ArrowLeft"){if(i>0)put(l[i-1]);else open()}
-else{var R=rows(),n=R[R.indexOf(r)+(d=="ArrowDown"?1:-1)];if(n){var m=items(n);put(m[Math.min(+n.dataset.i||0,m.length-1)])}}}},true);
+else{var R=rows(),n=R[R.indexOf(r)+(d=="ArrowDown"?1:-1)],q=document.querySelector(".tvsearch");if(n){var m=items(n);put(m[Math.min(+n.dataset.i||0,m.length-1)])}
+else if(d=="ArrowUp"&&q){q.focus();scrollTo(0,0)}}}},true);
 var f=document.querySelector(".trow .strip>a");if(f&&(!document.activeElement||document.activeElement==document.body))put(f)})()</script>"""
 
 # On the TV, holding OK on a video (for half a second) opens a menu: Not interested, Watch later and its channel.
@@ -1667,6 +1856,39 @@ addEventListener("focusin",function(e){near(e.target)});
 addEventListener("keydown",function(k){if(k.key=="ArrowRight")near(document.activeElement)},true)})()</script>"""
 
 
+# The TV app's arrow-key navigation (NAV in android/src/yaktube/tv/MainActivity.java, word for word): arrows move to
+# the nearest link or button that way. The TV pages carry it too, so the TV layout in a browser (?tv=1) gets around
+# the same way; it adds itself once, so in the TV app the app's own copy then does nothing. Added last, after the
+# page's own key handling (side panel, rows, player), which goes first. Change both copies together.
+TV_NAV_JS = "<script>(function(){if(window.__yak)return;window.__yak=1;var S='a[href],button,input,select,textarea,iframe,[tabindex]:not([tabindex=\"-1\"])';function all(){return[].filter.call(document.querySelectorAll(S),function(el){var r=el.getBoundingClientRect();return!el.disabled&&r.width>0&&r.height>0&&getComputedStyle(el).visibility!='hidden'})}function gap(a1,a2,b1,b2){return b2<a1?a1-b2:b1>a2?b1-a2:0}function show(el){el.focus();el.scrollIntoView({block:'center',inline:'nearest'})}function first(){var a=document.activeElement;if(a&&a!=document.body)return;var f=document.querySelector('iframe')||document.querySelector('.card,.row,.profiles button')||all()[0];if(f)show(f)}function go(d){var c=document.activeElement;if(!c||c==document.body){first();return true}var a=c.getBoundingClientRect(),best=null,bs=1e9;all().forEach(function(el){if(el==c||el.contains(c)||c.contains(el))return;var b=el.getBoundingClientRect(),m,x;if(d=='ArrowRight'){if(b.left<a.left+1||b.left+b.width/2<=a.left+a.width/2)return;m=Math.max(0,b.left-a.right);x=gap(a.top,a.bottom,b.top,b.bottom)}else if(d=='ArrowLeft'){if(b.right>a.right-1||b.left+b.width/2>=a.left+a.width/2)return;m=Math.max(0,a.left-b.right);x=gap(a.top,a.bottom,b.top,b.bottom)}else if(d=='ArrowDown'){if(b.top<a.top+1||b.top+b.height/2<=a.top+a.height/2)return;m=Math.max(0,b.top-a.bottom);x=gap(a.left,a.right,b.left,b.right)}else{if(b.bottom>a.bottom-1||b.top+b.height/2>=a.top+a.height/2)return;m=Math.max(0,a.top-b.bottom);x=gap(a.left,a.right,b.left,b.right)}var s=m+x*3;if(s<bs){bs=s;best=el}});if(best){show(best);return true}return false}addEventListener('keydown',function(k){var d=k.key;if(!/^Arrow/.test(d))return;var t=document.activeElement;if(t&&/INPUT|TEXTAREA/.test(t.tagName)&&t.value&&((d=='ArrowLeft'&&t.selectionStart>0)||(d=='ArrowRight'&&t.selectionEnd<t.value.length)))return;if(go(d))k.preventDefault()},true);window.yakBack=function(){var t=document.activeElement;if(t&&t.tagName=='IFRAME'){var l=all(),i=l.indexOf(t);var n=l[i+1]||l[0];if(n&&n!=t){show(n)}else{t.blur()}return true}return false};first()})()</script>"
+
+# Settings: selecting a setting (moving onto it with the remote, or clicking) shows it; Left comes back to it. Autoplay is kept on
+# this TV (the player reads it); region and language, and "Recommend again", are sent straight away; the two Clear
+# buttons ask first (PAGE_JS). Back from a clear, #watch / #search reopens that setting.
+SETTINGS_JS = """<script>(function(){var rows=[].slice.call(document.querySelectorAll(".srow"));
+function shut(){[].forEach.call(document.querySelectorAll(".sedit[data-open]"),function(b){b.hidden=false;b.nextElementSibling.hidden=true})}
+function show(k){shut();rows.forEach(function(r){r.classList.toggle("sel",r.dataset.p==k)});
+  [].forEach.call(document.querySelectorAll(".spane"),function(p){p.hidden=p.id!="p-"+k})}
+rows.forEach(function(r){r.addEventListener("focus",function(){show(r.dataset.p)});r.addEventListener("click",function(){show(r.dataset.p)})});
+// Left from the details goes back to the setting they belong to
+addEventListener("keydown",function(k){var a=document.activeElement,p=a&&a.closest&&a.closest(".spane");if(k.key!="ArrowLeft"||!p)return;
+  var x=a.getBoundingClientRect().left;if([].some.call(p.querySelectorAll("button,a"),function(b){var r=b.getBoundingClientRect();return r.width&&r.right<=x}))return;
+  k.preventDefault();k.stopImmediatePropagation();document.getElementById("r-"+p.id.slice(2)).focus()},true);
+var h=location.hash.slice(1),f=rows.filter(function(r){return r.dataset.p==h})[0]||rows[0];show(f.dataset.p);f.focus();
+function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b})}
+function mark(g,v){[].forEach.call(g.children,function(x){x.classList.toggle("on",x.dataset.v==v)})}
+var ap=document.querySelector('.sopts[data-k="ap"]'),on="0";
+if(ap){try{on=localStorage.yakap=="1"?"1":"0"}catch(x){}mark(ap,on);
+  ap.addEventListener("click",function(e){var b=e.target.closest("button");if(!b)return;try{localStorage.yakap=b.dataset.v}catch(x){}mark(ap,b.dataset.v)})}
+// Language and Location: OK on the round button shows the choices; choosing one saves it and folds them away again
+[].forEach.call(document.querySelectorAll(".sedit[data-open]"),function(b){var g=b.nextElementSibling;
+  b.onclick=function(){b.hidden=true;g.hidden=false;(g.querySelector(".on")||g.firstChild).focus()};
+  g.addEventListener("click",function(e){var o=e.target.closest("button");if(!o)return;post("/settings/region","k="+g.dataset.k+"&v="+o.dataset.v);
+    mark(g,o.dataset.v);b.querySelector("span").textContent=o.textContent;g.hidden=true;b.hidden=false;b.focus()})});
+var hc=document.getElementById("p-hidden");if(hc)hc.addEventListener("click",function(e){var b=e.target.closest("button[data-c]");if(!b)return;
+  post("/hide","c="+b.dataset.c+"&undo=1&js=1");var s=document.createElement("span");s.className="sdone";s.textContent="Back";
+  b.parentNode.classList.add("back");b.replaceWith(s);var l=hc.querySelectorAll("button[data-c]");(l[0]||document.getElementById("r-hidden")).focus()})})()</script>"""
+
 # Navigation icons (24x24, filled with the text colour).
 ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in {
     "home": '<path d="M12 3 2 12h3v8h5v-6h4v6h5v-8h3z"/>',
@@ -1685,6 +1907,9 @@ ICON = {k: f'<svg viewBox="0 0 24 24" aria-hidden="true">{v}</svg>' for k, v in 
           'a2 2 0 0 0 2 2h9a2 2 0 0 0 1.84-1.22l3.02-7.05A2 2 0 0 0 23 12z"/>',
     "share": '<path d="M14 4v5C7 10 4 15 3 20c2.5-3.5 6-5.1 11-5.1V20l8-8z"/>',
     "search": '<path d="M15.5 14h-.8l-.3-.3A6.5 6.5 0 1 0 14 15.5l.3.3v.8l5 5 1.5-1.5zm-6 0a4.5 4.5 0 1 1 0-9 4.5 4.5 0 0 1 0 9z"/>',
+    "set": '<path fill-rule="evenodd" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.6 7.6 0 0 0-1.7-1L15 3.3h-4l-.4 2.6a7.6 '
+           '7.6 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1a7.6 7.6 0 0 0 1.7 1l.4 2.6h4l.4-2.6a7.6 7.6 '
+           '0 0 0 1.7-1l2.5 1 2-3.5zM12 15.3a3.3 3.3 0 1 1 0-6.6 3.3 3.3 0 0 1 0 6.6z"/>',
 }.items()}
 # Home, Shorts and Subscriptions are the main three (the bar along the bottom on a phone); the rest sit under them
 # on a computer, or in the ribbon across the top on a phone.
@@ -1694,9 +1919,10 @@ MORE_TABS = (("new", "/new", "New to you"), ("later", "/later", "Later"), ("subs
 
 
 # The TV's rail down the left, in the order YouTube's Google TV app now uses: search, then the places you go most.
-TV_TABS = (("search", "/search", "Search"), ("home", "/", "Home"), ("shorts", "/shorts", "Shorts"),
-           ("feed", "/feed", "Subscriptions"), ("later", "/later", "Later"), ("hist", "/history", "History"),
-           ("subs", "/subs", "Channels"))                                     # (New to you is a row on Home)
+# The TV side panel, top to bottom: these four, a divider, the next three, a divider, Recent channels, then Settings
+# last (after a small gap). New to you is a row on Home.
+TV_TABS = (("search", "/search", "Search"), ("home", "/", "Home"), ("feed", "/feed", "Subscriptions"), ("shorts", "/shorts", "Shorts"))
+TV_MORE = (("later", "/later", "Watch Later"), ("subs", "/subs", "Channels"), ("hist", "/history", "History"))
 
 
 def rate_buttons(vid, val):
@@ -1760,16 +1986,18 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
     return head + (
         f'<header><button type="button" class="burger" title="Collapse or expand the menu" aria-label="Menu">'
         f'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg></button>'
-        f'<a class="logo" href="/">Yak<b>Tube</b></a>'
-        f'<nav class="rib">{links(MORE_TABS, False)}<a href="/profiles">{av}<span>Profiles</span></a></nav>'
+        + logo("a", ' href="/" aria-label="YakTube"') +
+        f'<nav class="rib">{links(MORE_TABS, False)}<a href="/profiles">{av}<span>Profiles</span></a>'
+        f'<a href="/settings" class="{"on" if tab == "set" else ""}"><span>Settings</span></a></nav>'
         f'<form class="go" action="/go"><input type="text" name="q" placeholder="Search, or paste a YouTube link…" '
         f'autocomplete="off" value="{e(q)}"></form>'
         f'<a href="/profiles" title="Switch profile ({e(prof["name"])})" class="av" style="background:{prof["color"]}">'
         f'{face(prof)}</a>{THEME_BTN}</header>'
-        f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}<hr>{THEME_BTN}</nav><main>{body}</main></div>'
+        f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}<hr>{THEME_BTN}'
+        f'{links((("set", "/settings", "Settings"),))}</nav><main>{body}</main></div>'
         f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         f'<nav class="tvside"><a class="me" href="/profiles">{av}<span>{e(prof["name"])}<small>Switch profile</small></span></a>'
-        f'{links(TV_TABS)}<!--tvrecent--></nav>'
+        f'{links(TV_TABS)}<hr>{links(TV_MORE)}<!--tvrecent--><i class="gap"></i>{links((("set", "/settings", "Settings"),))}</nav>'
         + PAGE_JS + '</body></html>')
 
 
@@ -1783,6 +2011,7 @@ class App(BaseHTTPRequestHandler):
             body = body.replace("</head>", TV_CSS + "</head>", 1)
             if "<!--tvrecent-->" in body:                       # the rail: channels you watched lately, and its script
                 body = body.replace("<!--tvrecent-->", self.tv_recent(), 1).replace("</body>", TV_JS + TV_MENU_JS + "</body>", 1)
+            body = body.replace("</body>", TV_NAV_JS + "</body>", 1)
         data = body.encode() if isinstance(body, str) else body
         self.send_response(status)
         self.send_header("Content-Type", ctype)
@@ -1797,15 +2026,32 @@ class App(BaseHTTPRequestHandler):
         """The TV app (its browser says "YakTubeTV"), or a browser switched to the TV layout with ?tv=1 (?tv=0: back)."""
         return "YakTubeTV" in self.headers.get("User-Agent", "") or "yak_tv=1" in self.headers.get("Cookie", "")
 
+    def tv_channel(self, v, sub):
+        """The TV player's channel button (its first letter in a circle) and the panel it opens: Subscribe, Go to
+        channel and Don't recommend channel. Without a channel, just Subscribe if there is one."""
+        cid, ref = v["channel_id"], v["channel_id"] or v["channel_url"]
+        if not ref:
+            return sub
+        name = v["channel_title"] or "Channel"
+        av = f'<i class="av" style="background:{COLORS[sum(map(ord, ref)) % len(COLORS)]}">{e(name[:1].upper())}</i>'
+        nr = ""
+        if cid:
+            hid = self.db.execute("SELECT 1 FROM hidden WHERE profile_id=? AND kind='c' AND ref=?", (self.prof["id"], cid)).fetchone()
+            label = "Recommend channel again" if hid else "Don't recommend channel"
+            nr = f'<button type="button" id="cpn" data-c="{e(cid)}" data-on="{1 if hid else 0}">{label}</button>'
+        return (f'<button id="chb" aria-haspopup="dialog" aria-expanded="false" aria-label="{e(name)}">{av}</button>'
+                f'<div id="cp" class="tvcp" role="dialog" aria-label="{e(name)}" hidden>{av}<b>{e(name)}</b>{sub}'
+                f'<a href="/channel?id={urllib.parse.quote(ref, safe="")}">Go to channel</a>{nr}</div>')
+
     def tv_recent(self):
-        """The TV rail's "Recent channels": the last 5 channels this profile watched."""
+        """The TV rail's "Recent channels": the last 3 channels this profile watched, after a divider."""
         rows = self.db.execute(
             "SELECT v.channel_id, COALESCE(ch.title, MAX(v.channel_title)) AS title, MAX(h.watched_at) AS at FROM history h "
             "JOIN videos v ON v.id=h.video_id LEFT JOIN channels ch ON ch.id=v.channel_id WHERE h.profile_id=? "
-            "AND v.channel_id IS NOT NULL GROUP BY v.channel_id ORDER BY at DESC LIMIT 5", (self.prof["id"],)).fetchall()
+            "AND v.channel_id IS NOT NULL GROUP BY v.channel_id ORDER BY at DESC LIMIT 3", (self.prof["id"],)).fetchall()
         if not rows:
             return ""
-        return '<h4>Recent channels</h4>' + "".join(
+        return '<hr><h4>Recent channels</h4>' + "".join(
             f'<a href="/channel?id={r["channel_id"]}"><i class="av" style="background:{COLORS[sum(map(ord, r["channel_id"])) % len(COLORS)]}">'
             f'{e((r["title"] or "?")[:1].upper())}</i><span>{e(r["title"] or "")}</span></a>' for r in rows)
 
@@ -1869,7 +2115,8 @@ class App(BaseHTTPRequestHandler):
                  ("GET", "/later"): self.later, ("GET", "/vstate"): self.vstate, ("POST", "/later/toggle"): self.later_toggle, ("POST", "/hide"): self.hide,
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/tv/more"): self.tv_more, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
-                 ("GET", "/history"): self.history, ("POST", "/history/clear"): self.history_clear,
+                 ("GET", "/history"): self.history, ("GET", "/settings"): self.settings,
+                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
                 return self.send(layout("Not found", '<div class="empty"><h1>Not found</h1></div>', self.prof), 404)
@@ -1911,12 +2158,24 @@ class App(BaseHTTPRequestHandler):
                f'<form class="center" method="post" action="/profiles/add" style="display:flex;gap:8px;max-width:360px;margin:0 auto">'
                f'<input type="text" name="name" placeholder="New profile name" maxlength="30" required>'
                f'<button class="btn">Add</button></form>')
-        body = (f'<div class="center"><div class="logo" style="font-size:34px;margin-top:40px">Yak<b>Tube</b></div>'
+        big = logo("div", ' style="font-size:34px;margin-top:40px"')
+        # Back: from Manage profiles to the profiles; otherwise to the page you came to Profiles from (once a profile is
+        # in use). That page is remembered in a cookie, so Back still works after Manage profiles, adding a profile or
+        # opening Profiles fresh, where the browser's own history would only bounce between Profiles pages.
+        ref, cookies = urllib.parse.urlsplit(self.headers.get("Referer", "")), SimpleCookie(self.headers.get("Cookie", ""))
+        came = ref.path + (f"?{ref.query}" if ref.query else "")
+        if ref.netloc == self.headers.get("Host", "") and came.startswith("/") and not came.startswith(("//", "/profiles")):
+            went, keep = came, [("Set-Cookie", f"yak_back={urllib.parse.quote(came, safe='')}; Path=/profiles; SameSite=Lax")]
+        else:
+            got = urllib.parse.unquote(cookies["yak_back"].value) if "yak_back" in cookies else "/"
+            went, keep = (got if got.startswith("/") and not got.startswith("//") else "/"), []
+        back = (f'<a class="pback" href="{"/profiles" if manage else e(went)}">← Back</a>' if self.profile() else "")
+        body = (f'{back}<div class="center">{big}'
                 f'<h1 style="margin-top:28px">{"Manage profiles" if manage else "Who’s watching?"}</h1>'
                 f'{"<p class=meta>Pick a profile to change it, or move it with the arrows.</p>" if manage else ""}</div>'
                 f'<div class="profiles">{"".join(tiles)}</div>{add}<p class="center meta" style="margin-top:22px">'
                 f'<a href="/profiles{"" if manage else "?manage=1"}">{"Done" if manage else "Manage profiles"}</a></p>')
-        self.send(layout("Profiles", body))
+        self.send(layout("Profiles", body), headers=keep)
 
     def one_profile(self, key="id", src=None):
         v = (src or self.q).get(key, "")
@@ -2082,7 +2341,9 @@ class App(BaseHTTPRequestHandler):
                 + [("More for you", [p for v in groups.values() if len(v) < 3 for p in v])])
         key = {"Recommended for you": "rec", "New from your subscriptions": "subs", "New to you": "ntu",
                "Shorts": "shorts", "More for you": "more"}
-        return '<h1 class="sr">Home</h1>' + "".join(
+        head = (f'<div class="tvhead"><a class="tvsearch" href="/search">{ICON["search"]}<span>Search</span></a>'
+                + logo() + '</div>')   # the YakTube logo, as on the TV app's banner
+        return '<h1 class="sr">Home</h1>' + head + "".join(
             f'<section class="trow" data-row="{e(key.get(title, title))}"><h2>{e(title.replace(": ", " "))}</h2><div class="strip">'
             + "".join(short_card(p) if title == "Shorts" else self.card(p[0], src=p[1], why=p[3]) for p in row)
             + '</div></section>' for title, row in rows if row) + HOME_JS + TV_ROWS_JS
@@ -2220,14 +2481,15 @@ class App(BaseHTTPRequestHandler):
                 f'<button id="rd" aria-label="Not for me">{ICON["up"]}</button>'
                 f'<button id="sr" aria-label="Share">{ICON["share"]}</button></div>'
                 '<div id="pb" role="slider" aria-label="Seek"><i><b></b></i></div><div id="tm" hidden></div>'
-                '<div id="toast" hidden></div><div id="ud"><button id="up" aria-label="Previous">▲</button>'
+                '<div id="toast" hidden></div><div id="hint"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>'
+                'Press down for next Short</div><div id="ud"><button id="up" aria-label="Previous">▲</button>'
                 '<button id="dn" aria-label="Next">▼</button></div></div>'
                 + YT_JS + SHORTS_JS.replace("__LIST__", data).replace("__EMBED__", EMBED))
         self.send(layout("Shorts", body))
 
     def seen(self):
         """The players report here. n=1 (or nothing, as Shorts send) puts the video in History; t and d are how far in
-        and how long, saved so the video can resume. A video watched to the end starts over and leaves Watch later."""
+        and how long, saved so the video can resume. A video watched to the end starts over (it stays in Watch later until you remove it)."""
         f, pid = self.form(), self.prof["id"]
         vid = f.get("v", "")
         if VID_RE.match(vid):
@@ -2241,8 +2503,6 @@ class App(BaseHTTPRequestHandler):
                             "WHERE profile_id=? AND video_id=?", (0 if done or t < 5 else t, t, d, d, pid, vid))
             if d > 0:
                 self.db.execute("UPDATE videos SET length=? WHERE id=? AND COALESCE(length,0)=0", (d, vid))
-            if done:
-                self.db.execute("DELETE FROM later WHERE profile_id=? AND video_id=?", (pid, vid))
         self.send("", 204)
 
     # -- watch later, not interested
@@ -2252,7 +2512,7 @@ class App(BaseHTTPRequestHandler):
             "LEFT JOIN history h ON h.video_id=v.id AND h.profile_id=l.profile_id WHERE l.profile_id=? "
             "ORDER BY l.added_at DESC, l.rowid DESC", (self.prof["id"],)).fetchall()
         if rows:
-            body = (f'<div class="bar"><h1>Watch later</h1><span class="meta">Leaves the list once you\'ve watched it to the end</span></div>'
+            body = (f'<div class="bar"><h1>Watch later</h1><span class="meta">Stays here until you remove it</span></div>'
                     f'<div class="grid">{"".join(self.card(r, r["seen"]) for r in rows)}</div>')
         else:
             body = ('<div class="empty"><h1>Nothing saved yet</h1><p>Use the Watch later button under a video to keep it here for another time.</p><a class="btn" href="/">Back to your feed</a></div>')
@@ -2386,8 +2646,10 @@ class App(BaseHTTPRequestHandler):
             chan = f'<a class="ch" href="/channel?id={urllib.parse.quote(v["channel_id"] or v["channel_url"], safe="")}">{chan}</a>'
         if self.tv():
             top = f'<b>{e(v["title"] or "")}</b><span>{e(" · ".join(x for x in (v["channel_title"] or "", meta) if x))}</span>'
-            acts = rate_buttons(vid, mine[0] if mine else 0) + sub + sub_later
-            player = TRACK_JS + TV_PLAYER.replace("__VID__", vid).replace("__T0__", t0).replace("__TOP__", top).replace("__ACTS__", acts)
+            acts = rate_buttons(vid, mine[0] if mine else 0) + sub_later
+            player = TRACK_JS + (TV_PLAYER.replace("__VID__", vid).replace("__T0__", t0).replace("__TOP__", top)
+                                 .replace("__CHAN__", self.tv_channel(v, sub)).replace("__ACTS__", acts)
+                                 .replace("__HL__", REGION["hl"]))
         else:
             player = WEB_PLAYER.replace("__VID__", vid).replace("__T0__", t0)
         body = (f'<div class="watch"><div>{player}'
@@ -2548,17 +2810,102 @@ class App(BaseHTTPRequestHandler):
         rows = self.db.execute(
             "SELECT v.*, h.watched_at FROM history h JOIN videos v ON v.id=h.video_id WHERE h.profile_id=? "
             "ORDER BY h.watched_at DESC LIMIT 200", (self.prof["id"],)).fetchall()
+        n = self.db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (self.prof["id"],)).fetchone()[0]
         items = "".join(
             f'<div><a href="/watch?v={r["id"]}"><img src="{thumb(r["id"])}" loading="lazy" alt="" '
             f'style="width:120px;aspect-ratio:16/9;object-fit:cover;border-radius:6px;display:block"></a>'
             f'<a class="grow" href="/watch?v={r["id"]}"><strong>{e(r["title"] or r["id"])}</strong>'
             f'<div class="meta">{e(r["channel_title"] or "")} · watched {ago(r["watched_at"])}</div></a>'
-            f'<form method="post" action="/history/remove"><input type="hidden" name="v" value="{r["id"]}">'
+            f'<form method="post" action="/history/remove" data-sure="Remove"><input type="hidden" name="v" value="{r["id"]}">'
             f'<button class="btn ghost small" title="Remove from history">✕</button></form></div>' for r in rows)
         body = ('<div class="bar"><h1>Watch history</h1>'
-                + ('<form method="post" action="/history/clear"><button class="btn ghost small">Clear all</button></form>' if rows else "")
+                + (ask_first("/history/clear", {}, "Clear all", f"Clear all {n} video{'s' if n != 1 else ''} from History?",
+                             "btn ghost small") if rows else "")
                 + "</div>" + (f'<div class="list">{items}</div>' if rows else '<p class="meta">Nothing watched yet.</p>'))
         self.send(layout("History", body, self.prof, "hist"))
+
+    # -- settings
+    def settings(self):
+        """Settings, laid out like the YouTube TV app's: setting names down the left in groups, the selected one on the
+        right, centred: a big title, one short line, wide round buttons. On the TV: server address (TV app only) and
+        autoplay. For everyone: language and location (the whole of YakTube) and this profile's hidden channels, watch
+        history and search history; then App version."""
+        pid, name, tv = self.prof["id"], e(self.prof["name"]), self.tv()
+        rows, panes = [], []
+
+        def add(k, title, line, inner):
+            rows.append(f'<button type="button" class="srow" data-p="{k}" id="r-{k}">{title}</button>')
+            panes.append(f'<section class="spane" id="p-{k}" hidden><h2>{title}</h2>{f"<p>{line}</p>" if line else ""}{inner}</section>')
+
+        def opts(k, items, cur, hidden=False):
+            return (f'<div class="sopts" data-k="{k}"{" hidden" if hidden else ""}>' + "".join(
+                f'<button type="button" class="sopt{" on" if v == cur else ""}" data-v="{v}">{n}</button>' for v, n in items) + '</div>')
+
+        def pick(k, label, items, cur):   # one round button ("Location: Canada ✎"); OK on it shows the choices
+            return (f'<button type="button" class="sopt sedit" data-open="{k}">{label}: <span>{dict(items).get(cur, cur)}</span>'
+                    f'<i>✎</i></button>' + opts(k, items, cur, True))
+
+        def ask(what, label):
+            return ask_first("/settings/clear", {"what": what}, label, "")
+
+        if tv:
+            rows.append("<h4>This TV</h4>")
+        if "YakTubeTV" in self.headers.get("User-Agent", ""):    # the TV app only: a browser has its own address bar
+            add("addr", "Server address", "Where this TV finds YakTube.",
+                f'<a class="sopt sedit" href="yaktube:setup">{e(self.headers.get("Host", ""))}<i>✎</i></a>')
+        if tv:
+            add("ap", "Autoplay next video", "When a video ends, the next one plays.", opts("ap", (("1", "On"), ("0", "Off")), ""))
+        rows.append("<h4>Language &amp; Location</h4>")
+        add("lang", "Language", "For captions, search and suggestions. Menus stay in English.", pick("hl", "Language", LANGS, REGION["hl"]))
+        add("loc", "Location", "Shapes the Shorts and suggestions you see.", pick("gl", "Location", REGIONS, REGION["gl"]))
+        rows.append("<h4>History &amp; Data</h4>")
+        hid = self.db.execute(
+            "SELECT h.ref, COALESCE(ch.title, (SELECT channel_title FROM videos WHERE channel_id=h.ref AND channel_title<>'' LIMIT 1), "
+            "h.ref) AS title FROM hidden h LEFT JOIN channels ch ON ch.id=h.ref WHERE h.profile_id=? AND h.kind='c' "
+            "ORDER BY h.added_at DESC", (pid,)).fetchall()
+        add("hidden", "Hidden channels", "Kept out of Home and New to you." if hid else "None hidden.",
+            "".join(f'<div class="shid"><i class="av" style="background:{COLORS[sum(map(ord, r["ref"])) % len(COLORS)]}">'
+                    f'{e((r["title"] or "?")[:1].upper())}</i><span class="nm">{e(r["title"])}</span>'
+                    f'<button type="button" class="btn ghost small" data-c="{e(r["ref"])}">Recommend again</button></div>' for r in hid))
+        n = self.db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (pid,)).fetchone()[0]
+        add("watch", "Clear watch history",
+            f"Removes {name}'s {n} watched video{'s' if n != 1 else ''}." if n else f"{name}'s History is empty.",
+            ask("watch", "Clear watch history") if n else "")
+        n = self.db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=? AND auto=0", (pid,)).fetchone()[0]
+        add("search", "Clear search history",
+            f"Removes {name}'s {n} search{'es' if n != 1 else ''}." if n else "No searches remembered.",
+            ask("search", "Clear search history") if n else "")
+        rows.append("<h4>About</h4>")
+        ua = self.headers.get("User-Agent", "")
+        tvapp = re.search(r"YakTubeTV/(\S+)", ua)
+        tvver = (tvapp.group(1) if tvapp.group(1) != "1" else "1.6 or earlier") if tvapp else ""   # before 1.7 they all said "1"
+        dev = re.search(r"Android ([\d.]+); ([^;)]+?)(?: Build/|\))", ua) if tvapp else None   # e.g. "Chromecast, Android 12"
+        facts = [("Version", VERSION), ("TV app", tvver),
+                 ("Device", f"{dev.group(2).strip()}, Android {dev.group(1)}" if dev else ""),
+                 ("Region", REGION["gl"]), ("Language", REGION["hl"]), ("Hosting", "Self-hosted")]
+        add("about", "App version", "", '<div class="sver">' + "".join(f'<span>{k}</span><b>{e(v)}</b>' for k, v in facts if v) + '</div>')
+        body = ('<div class="bar"><h1>Settings</h1></div><div class="sets">'
+                f'<div class="slist">{"".join(rows)}</div><div>{"".join(panes)}</div></div>' + SETTINGS_JS)
+        self.send(layout("Settings", body, self.prof, "set"))
+
+    def settings_region(self):
+        """Region and language: saved for the whole of YakTube. The next Shorts batch is asked for straight away."""
+        f = self.form()
+        k, v = f.get("k", ""), f.get("v", "")
+        if v in dict({"gl": REGIONS, "hl": LANGS}.get(k, ())):
+            self.db.execute("INSERT OR REPLACE INTO settings(k, v) VALUES(?, ?)", (k, v))
+            REGION[k] = v
+            OUTSIDE_AT[0] = 0
+            return self.send("", 204)
+        self.send("", 400)
+
+    def settings_clear(self):
+        what, pid = self.form().get("what", ""), self.prof["id"]
+        if what == "watch":
+            self.db.execute("DELETE FROM history WHERE profile_id=?", (pid,))
+        elif what == "search":     # YakTube's own topic searches too: they come back from what's watched next
+            self.db.execute("DELETE FROM searches WHERE profile_id=?", (pid,))
+        self.redirect("/settings#" + (what if what in ("watch", "search") else ""))
 
     def history_clear(self):
         self.db.execute("DELETE FROM history WHERE profile_id=?", (self.prof["id"],))

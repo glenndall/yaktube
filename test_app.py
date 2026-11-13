@@ -286,8 +286,11 @@ class T(unittest.TestCase):
         self.assertTrue(all(page.index('<h2>New to you</h2>') < page.index(f'href="/watch?v=tvn{i:08d}"') for i in range(6)))
         self.assertIn('class="tvside"', page)
         rail = page[page.index('class="tvside"'):]
-        for label in ("Search", "Home", "Shorts", "Subscriptions", "Later", "History", "Channels"):
+        for label in ("Search", "Home", "Shorts", "Subscriptions", "Watch Later", "History", "Channels", "Settings"):
             self.assertIn(f"<span>{label}</span>", rail)
+        order = [rail.index(f"<span>{x}</span>") for x in ("Search", "Home", "Subscriptions", "Shorts", "Watch Later", "Channels", "History")]
+        self.assertEqual(order, sorted(order))                                   # in the TV app's order...
+        self.assertLess(rail.index("Recent channels"), rail.index("<span>Settings</span>"))   # ...and Settings last
         self.assertNotIn("<span>New to you</span>", rail)
         self.assertLess(rail.index("<span>Search"), rail.index("<span>Home"))
         self.assertLess(rail.index("Switch profile"), rail.index("<span>Search"))   # profile at the top...
@@ -349,6 +352,10 @@ class T(unittest.TestCase):
         self.assertIn('class="tvside"', page)
         self.assertIn(".tvside{display:flex", page)
         self.assertNotIn(".tvside{display:flex", self.get(b, "/feed?tv=0")[2])
+        page = self.get(b, "/feed?tv=1")[2]                                   # the TV app's arrow keys, in the page too,
+        self.assertIn("window.__yak=1", page)                                 # after the page's own key handling
+        self.assertLess(page.index("stopImmediatePropagation"), page.index("window.__yak=1"))
+        self.assertNotIn("window.__yak=1", self.get(b, "/feed?tv=0")[2])
         db.close()
 
     def test_20_lengths(self):
@@ -476,7 +483,7 @@ class T(unittest.TestCase):
         page = self.get(a, "/watch?v=vid00000002")[2]
         self.assertIn("t0=125,", page)                                 # the TV player resumes too
         self.assertIn('id="nxg">Play now', page)                       # ...and can play the next video when one ends,
-        self.assertIn('id="ap">Autoplay off', page)                    # but only if switched on (off by default)
+        self.assertIn("localStorage.yakap", page)                     # but only if switched on in Settings (off by default)
         self.assertIn('if(!ap||!a||nx)return', page)
         self.assertIn("#upnext a.row:not(.seen)", page)
         a.addheaders = []
@@ -491,8 +498,8 @@ class T(unittest.TestCase):
         page = self.get(a, "/later")[2]
         self.assertLess(page.index("Video 2"), page.index("Video 4"))  # newest save first
         self.assertEqual(post("/later/toggle", "v=vid00000004"), "0")  # again takes it off
-        post("/seen", "v=vid00000002&n=0&t=595&d=600")                 # watched to the end: leaves the list...
-        self.assertIn("Nothing saved yet", self.get(a, "/later")[2])
+        post("/seen", "v=vid00000002&n=0&t=595&d=600")                 # watched to the end: stays on the list...
+        self.assertIn("Video 2", self.get(a, "/later")[2])
         self.assertIn("&start=0&", self.get(a, "/watch?v=vid00000002")[2])   # ...and starts over next time
         self.assertEqual(post("/later/toggle", "v=bad"), "0")
         # search shows matching channels, with a Subscribe button that comes back to the results
@@ -656,10 +663,16 @@ class T(unittest.TestCase):
             self.assertIn(b, tvbar)
         self.assertIn('<div class="tvtop"><b>Video 2 &lt;b&gt;</b>', page)   # the title over the picture
         self.assertNotIn("__ACTS__", page)
+        self.assertNotIn("__CHAN__", page)
+        panel = tvbar[tvbar.index('<div id="cp" class="tvcp"'):]                 # the channel's circle opens a panel
+        self.assertIn('<button id="chb" aria-haspopup="dialog"', tvbar)
+        for b in ('action="/subs/', '>Go to channel</a>', "Don't recommend channel"):
+            self.assertIn(b, panel)
         menu = page[page.index('<div id="gm" class="tvgm" role="menu" hidden>'):page.index('<div class="tvtop">')]   # ⚙ Settings
-        for b in ('id="cc">Captions off', 'id="sp">Speed 1×', 'id="ql">Quality Auto', 'id="ap">Autoplay off'):
+        for b in ('id="cc">Captions off', 'id="sp">Speed 1×', 'id="ql">Quality Auto'):
             self.assertIn(b, menu)
         self.assertNotIn('id="cc"', tvbar[:tvbar.index('id="gs"')])     # not on the bar itself any more
+        self.assertNotIn('id="ap"', page)                                # Autoplay moved to Settings
         self.assertIn('embed/"+V', page)
         self.assertIn("vid00000002", page)
         self.assertIn(".tvbar", page)                                   # TV styles included
@@ -835,6 +848,12 @@ class T(unittest.TestCase):
         db = app.connect()
         pid = db.execute("SELECT id FROM profiles WHERE name='Edy'").fetchone()[0]
         manage = self.get(op, "/profiles?manage=1")[2]
+        self.assertIn('<a class="pback" href="/profiles">← Back</a>', manage)        # Back: to the profiles...
+        op.addheaders = [("Referer", self.base + "/later")]                          # ...or to where you came from,
+        self.assertIn('<a class="pback" href="/later">← Back</a>', self.get(op, "/profiles")[2])
+        op.addheaders = [("Referer", self.base + "/profiles?manage=1")]               # remembered past Manage / Done
+        self.assertIn('<a class="pback" href="/later">← Back</a>', self.get(op, "/profiles")[2])
+        op.addheaders = []
         self.assertIn(f'href="/profiles/edit?id={pid}"', manage)                   # tiles open the editor...
         self.assertNotIn('action="/profiles/delete"', manage)                       # ...and never delete straight away
         page = self.get(op, f"/profiles/edit?id={pid}")[2]
@@ -875,6 +894,87 @@ class T(unittest.TestCase):
         subs = self.get(self.login("Zippy"), "/subs")[2]                          # a Takeout .zip can be chosen as is
         self.assertIn('accept=".zip,', subs)
         self.assertIn('DecompressionStream("deflate-raw")', subs)
+
+    def test_22_settings(self):
+        op = self.login("Seth")
+        db = app.connect()
+        pid = db.execute("SELECT id FROM profiles WHERE name='Seth'").fetchone()[0]
+        post = lambda path, body: op.open(self.base + path, body.encode())
+        page = self.get(op, "/settings")[2]
+        self.assertIn('href="/settings"', page)                                        # in the side panel
+        for k in ("lang", "loc", "hidden", "watch", "search"):
+            self.assertIn(f'data-p="{k}"', page)
+        self.assertNotIn('data-p="addr"', page)                                        # this-TV settings only on a TV
+        for h in ("Language &amp; Location", "History &amp; Data", "About"):   # grouped like YouTube's
+            self.assertIn(f"<h4>{h}</h4>", page)
+        self.assertIn('data-p="about"', page)                                         # App version, last
+        self.assertIn(app.VERSION, page)
+        self.assertRegex(app.VERSION, r"^\d{4}\.\d\d\.\d\d · [0-9a-f]{7}$")
+        self.assertNotIn("YakTube TV app", page)                                       # (no TV app in a browser)
+        # region and language: for the whole of YakTube, sent with every request to YouTube
+        try:
+            self.assertEqual(post("/settings/region", "k=gl&v=MX").status, 204)
+            self.assertEqual(post("/settings/region", "k=hl&v=es").status, 204)
+            with self.assertRaises(urllib.error.HTTPError):
+                post("/settings/region", "k=gl&v=XX")
+            self.assertEqual(app.REGION, {"gl": "MX", "hl": "es"})
+            self.assertIn("PREF=hl=es&gl=MX", app.yt_cookie())
+            page = self.get(op, "/settings")[2]
+            self.assertIn("Location: <span>Mexico</span>", page)
+            self.assertIn("Language: <span>Español</span>", page)
+            op.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
+            self.assertIn('languageCode:"es"', self.get(op, "/watch?v=vid00000002")[2])   # captions in Spanish
+            app.REGION.update(gl="US", hl="en")
+            app.init_db()                                                             # saved: back after a restart
+            self.assertEqual(app.REGION, {"gl": "MX", "hl": "es"})
+            tv = self.get(op, "/settings")[2]
+            self.assertIn('data-p="addr"', tv)                                         # on the TV: server address,
+            self.assertIn('href="yaktube:setup"', tv)
+            self.assertIn('data-p="ap"', tv)                                           # and autoplay
+            op.addheaders = []
+            self.assertIn("1.6 or earlier", tv)                                        # app version (old apps say "1")
+            op.addheaders = [("User-Agent", "Mozilla/5.0 (Linux; Android 12; Chromecast Build/STTE.230; wv) AppleWebKit/537.36 YakTubeTV/1.9")]
+            about = self.get(op, "/settings")[2]
+            self.assertIn("<span>TV app</span><b>1.9</b>", about)                     # like YouTube's: facts, no sentences
+            self.assertIn("<span>Device</span><b>Chromecast, Android 12</b>", about)
+            self.assertIn("<span>Region</span><b>MX</b>", about)
+            self.assertIn("<span>Hosting</span><b>Self-hosted</b>", about)
+            op.addheaders = []
+            br = self.get(op, "/settings?tv=1")[2]                                    # the TV layout in a browser:
+            self.assertIn('data-p="ap"', br)                                           # autoplay, but no server address
+            self.assertNotIn('data-p="addr"', br)                                      # (only the TV app can change it)
+            self.get(op, "/settings?tv=0")
+        finally:
+            db.execute("DELETE FROM settings")
+            app.REGION.update(gl="US", hl="en")
+        # hidden channels, listed with Recommend again
+        db.execute("INSERT INTO hidden(profile_id,kind,ref,added_at) VALUES(?,?,?,1)", (pid, "c", CID2))
+        page = self.get(op, "/settings")[2]
+        self.assertIn(f'data-c="{CID2}">Recommend again', page)
+        self.assertIn("Retro &amp; Co", page)
+        # clearing: watch history and search history, for this profile only
+        self.play(op, "vid00000001")
+        db.execute("INSERT INTO searches(profile_id,q,at) VALUES(?,?,1)", (pid, "retro games"))
+        page = self.get(op, "/settings")[2]
+        self.assertIn("Removes Seth's 1 watched video.", page)                     # one short line each
+        self.assertIn("Removes Seth's 1 search.", page)
+        self.assertIn("This can't be undone", page)                                # Clear asks first
+        _, url, _ = self.get(op, "/settings/clear", {"what": "watch"})
+        self.assertTrue(url.endswith("/settings#watch"))                              # back to that setting
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (pid,)).fetchone()[0], 0)
+        self.get(op, "/settings/clear", {"what": "search"})
+        self.assertEqual(db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=?", (pid,)).fetchone()[0], 0)
+        page = self.get(op, "/settings")[2]
+        self.assertIn("Seth's History is empty.", page)
+        # the History page asks first too: Clear all, and ✕ on a video needs a second press
+        self.play(op, "vid00000001")
+        hist = self.get(op, "/history")[2]
+        self.assertIn('data-ask>Clear all</button>', hist)
+        self.assertIn("Clear all 1 video from History? This can't be undone.", hist)
+        self.assertIn('action="/history/remove" data-sure="Remove"', hist)
+        self.assertIn('f.dataset.sure', hist)
+        self.assertIn("No searches remembered.", page)
+        db.close()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

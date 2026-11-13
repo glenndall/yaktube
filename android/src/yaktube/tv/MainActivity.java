@@ -107,7 +107,10 @@ public class MainActivity extends Activity {
         s.setJavaScriptEnabled(true);
         s.setDomStorageEnabled(true);
         s.setMediaPlaybackRequiresUserGesture(false); // videos start without a click
-        s.setUserAgentString(s.getUserAgentString() + " YakTubeTV/1"); // YakTube switches to its TV layout
+        String ver = "1";
+        try { ver = getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception ignored) { }
+        s.setUserAgentString(s.getUserAgentString() + " YakTubeTV/" + ver); // YakTube switches to its TV layout
+                                                                             // (and shows this version in Settings)
         CookieManager.getInstance().setAcceptCookie(true);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, true);
 
