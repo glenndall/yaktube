@@ -5,3 +5,7 @@ __pycache__
 data/
 android/build/
 android/*.apk
+
+# local tool state and launch drafts
+.claude/
+docs/selfhosted-post-draft.md
