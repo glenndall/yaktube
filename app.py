@@ -410,7 +410,7 @@ SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > Yak
              "on": "0", "addr": "", "port": "8095",             #   the YakScout plugin: on/off, where it is
              "seen": "0",                                       #   and when it last answered
              "min": "", "days": "60",                           # Advanced: drop at (blank: SCOUT_MIN), remember for,
-             "share": "0", "review": "0"}                       #   Share on voices, Submissions (the list's maintainer)
+             "review": "0"}                                     #   Submissions: Share on ready voices, the open list
 SCOUT_MIN = int(os.environ.get("YAK_SCOUT_MIN", "50"))          # score (0-100) at which a Short counts as a farm's
 SCOUT_PER_RUN = 80                                              # Shorts judged per batch (the rest wait for the next)
 
@@ -950,13 +950,18 @@ def scout_pane(c):
         n = e(str(v.get("name", "")))
         q = urllib.parse.quote(str(v.get("name", "")))
         share = ""
-        if v.get("source") != "shared" and SCOUT_CFG["share"] == "1":                   # the shared list wants 2+ channels: a lone one waits here
-            # 2+ channels and 2+ Shorts (an older YakScout that doesn't count Shorts is judged on channels alone)
-            if isinstance(v.get("channels"), int) and v["channels"] >= 2 and v.get("examples", 2) >= 2:
-                share = (f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
-                         'title="Send it to the shared voice list">Share</a>')
+        if v.get("source") != "shared":                   # the shared list wants 2+ channels and 2+ Shorts: shown always
+            # (an older YakScout that doesn't count Shorts is judged on channels alone)
+            chans = v["channels"] if isinstance(v.get("channels"), int) else 0
+            more = [f'{k} more {w}{"s" if k > 1 else ""}' for k, w in ((2 - chans, "channel"), (2 - v.get("examples", 2), "Short"))
+                    if k > 0]                               # red: the first thing missing (a channel brings a Short); green: ready
+            if more:
+                share = f'<span class="tag need" title="The shared list needs 2 channels and 2 Shorts">Needs {more[0]}</span>'
             else:
-                share = f'<span class="tag" title="The shared list needs 2 channels and 2 Shorts">{"Needs 2 channels" if not isinstance(v.get("channels"), int) or v["channels"] < 2 else "Needs 2 Shorts"}</span>'
+                share = ('<span class="tag ready" title="Turn on Advanced &gt; Submissions to share it">Ready to submit</span>'
+                         if SCOUT_CFG["review"] != "1" else '<span class="tag ready">Ready to submit</span>'
+                         f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
+                         'title="Send it to the shared voice list">Share</a>')
         return share + (f'<button type="button" class="x" data-forget="{n}" aria-label="'
                         f'{"Hide here" if v.get("source") == "shared" else "Forget"}">×</button>')
     vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', e(str(v.get("name", "?"))),
@@ -1030,8 +1035,7 @@ def scout_pane(c):
             '<div class="chk"><div>Remember for<small>Then YakScout looks again</small></div><select class="btn ghost small" '
             'data-set="days" aria-label="Remember for">' + "".join(
                 f'<option value="{d}"{" selected" if d == days else ""}>{d} days</option>' for d in ("30", "60", "90")) +
-            '</select></div>' + switch("share", "Share voices", "Send to the shared list") +
-            switch("review", "Review submissions", "For the list's maintainer") +
+            '</select></div>' + switch("review", "Submissions", "Share voices, check the list") +
             '<div class="chk"><div>Backup<small>Lists, voices, settings &amp; log (.zip)</small></div>'
             '<a class="btn ghost small" href="/scout/backup" download>Download</a></div>'
             '<div class="chk"><div>Restore<small>From a backup; adds to what\'s here</small><span class="msg" id="sc-rmsg" '
@@ -1669,10 +1673,10 @@ def refresher_loop():
 
 # ---------------------------------------------------------------- views
 CSS = """
-:root{--bg:#f7f6f3;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e4e2dd;--accent:#d9480f;color-scheme:light}
+:root{--bg:#f7f6f3;--card:#fff;--fg:#1d1d1f;--muted:#6e6e73;--line:#e4e2dd;--accent:#d9480f;--need:#c92a2a;--ready:#2b8a3e;color-scheme:light}
 /* dark follows the system unless the header toggle chose one (html data-theme, kept in localStorage) */
-@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;color-scheme:dark}}
-:root[data-theme=dark]{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;color-scheme:dark}
+@media (prefers-color-scheme:dark){:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;--need:#ff8787;--ready:#69db7c;color-scheme:dark}}
+:root[data-theme=dark]{--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;--need:#ff8787;--ready:#69db7c;color-scheme:dark}
 .theme{background:none;border:0;color:var(--fg);font:inherit;cursor:pointer;flex:none}
 .theme svg{width:22px;height:22px;flex:none;fill:none;stroke:currentColor;stroke-width:2;stroke-linecap:round}
 .theme .sun,:root[data-theme=dark] .theme .moon{display:none}:root[data-theme=dark] .theme .sun{display:contents}
@@ -1900,6 +1904,7 @@ form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!
 .scp .item .btn{width:auto;flex:none;min-height:32px;padding:0 12px;font-size:13px}
 .scp .item.back img{opacity:.45}.scp .sdone{font-size:13px;color:var(--muted);flex:none}
 .scp .tag{font-size:11px;font-weight:600;padding:1px 7px;border-radius:6px;background:var(--line);color:var(--fg);margin-right:6px;flex:none}
+.scp .tag.need,.scp .tag.ready{color:var(--need);background:none;box-shadow:inset 0 0 0 1px currentColor}.scp .tag.ready{color:var(--ready)}
 .scp .x{flex:none;border:0;background:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
 .scp .x:hover,.scp .x:focus-visible{color:var(--fg);background:var(--line)}
 .scp .empty{padding:12px 16px;color:var(--muted);font-size:13px}
@@ -1913,7 +1918,7 @@ form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!
 
 # Extra styles when the page is shown by the YakTube TV app (its browser says "YakTubeTV").
 TV_CSS = """<style>
-:root,:root[data-theme],:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c}
+:root,:root[data-theme],:root:not([data-theme=light]){--bg:#111;--card:#1c1c1e;--fg:#f2f2f2;--muted:#9a9aa0;--line:#2c2c2e;--accent:#ff6b2c;--need:#ff8787;--ready:#69db7c}
 body{font-size:17px}main{padding:18px 28px 40px 104px;max-width:none}
 header,.side,.rib,.bot{display:none!important}.shell{display:block}
 /* the rail: icons down the left; it widens with names when the remote moves into it. Sized like the YouTube app on
@@ -2663,7 +2668,7 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
   var b=ev.target.closest("button");if(!b)return;
   if(b.dataset.k){var on=!b.classList.contains("on");b.classList.toggle("on",on);b.setAttribute("aria-checked",on);
     b.firstChild.nodeValue=on?"On":"Off";var sv=post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again();
-    if(b.dataset.k=="share"||b.dataset.k=="review")sv.then(now)}
+    if(b.dataset.k=="review")sv.then(now)}
   else if(b.dataset.keep){post("/scout/keep","v="+b.dataset.keep);var s=document.createElement("span");s.className="sdone";
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
@@ -3728,7 +3733,7 @@ class App(BaseHTTPRequestHandler):
         """Settings > YakScout: the two switches, and where the YakScout plugin is (an address, or address:port)."""
         f = self.form()
         k, v = f.get("k", ""), f.get("v", "").strip()
-        if k in ("share", "review") and v in ("0", "1"):              # only what Settings shows: no need to reconnect
+        if k == "review" and v in ("0", "1"):              # only what Settings shows: no need to reconnect
             scout_save(self.db, k, v)
             return self.send("", 204)
         if k in ("text", "on") and v in ("0", "1"):
