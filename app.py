@@ -1866,8 +1866,9 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!important;box-shadow:none!important}
 @media(max-width:720px){.sets{grid-template-columns:minmax(0,1fr)}.sets>*{min-width:0}.slist{border:0;padding:0}.spane{padding-top:16px}.scp .stats{gap:8px}.scp .stat{padding:10px 12px;min-width:0}.scp .stat b{font-size:21px}.scp .stat span{font-size:12px}}
 /* Settings > YakScout: a wider page than the others, left-aligned, in sections */
-.spane.scp{align-items:stretch;text-align:left;max-width:640px;padding-top:28px}
-.scp .sch{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.scp .sch h2{margin:0;flex:1}
+.spane.scp{align-items:stretch;text-align:left;max-width:640px;width:100%;margin:0 auto;padding-top:28px}   /* centred like the others */
+.scp .sch{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}.scp .sch h2{margin:0}
+.spane.scp>p{align-self:center;text-align:center}
 .scp .chip{display:inline-flex;align-items:center;gap:7px;padding:6px 12px;border-radius:999px;background:var(--card);border:1px solid var(--line);font-size:13px;color:var(--muted)}
 .scp .chip i{width:8px;height:8px;border-radius:50%;background:#f59f00}.scp .chip.ok i{background:#2f9e44}
 .scp .chip.down i{background:#e03131}.scp .chip.off i{background:var(--muted)}
