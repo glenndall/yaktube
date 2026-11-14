@@ -751,7 +751,7 @@ def scout_link_loop():
 # Settings > Scout > Submissions: the open pull requests on the shared voice list, each checked twice at home:
 # the Scout plugin listens to its example Shorts (same voice?), and the titles & captions check reads them (farm
 # clues?). GitHub's servers can't do the listening (YouTube blocks them), so it happens here. Merging stays on GitHub.
-SCOUT_LIST_REPO = os.environ.get("YAK_SCOUT_LIST_REPO", "glenndall/yakscout-voices")
+SCOUT_LIST_REPO = os.environ.get("YAK_SCOUT_LIST_REPO", "glenndall/scout-voices")
 SCOUT_REVIEW = {"at": 0, "error": "", "items": [], "synced": 0, "sync_ok": False}
 SCOUT_FARM_CLUE = 30                                            # a titles & captions score this high is a farm clue
 

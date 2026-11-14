@@ -1318,7 +1318,7 @@ class ScoutTests(unittest.TestCase):
         r = conn.getresponse()
         to = urllib.parse.urlsplit(r.getheader("Location"))
         q = urllib.parse.parse_qs(to.query)
-        self.assertEqual((r.status, to.netloc, to.path), (303, "github.com", "/glenndall/yakscout-voices/issues/new"))
+        self.assertEqual((r.status, to.netloc, to.path), (303, "github.com", "/glenndall/scout-voices/issues/new"))
         self.assertEqual((q["template"], q["channels"], q["title"]), (["submit-voice.yml"], ["Drip Dyl"], ["Voice: Drip Dyl"]))
         self.assertIn('data-submit="/scout/submit?name=tbQTA6u4lEM"', page)
         self.assertIn("<b>2.4 s</b> a Short", page)
@@ -1390,7 +1390,7 @@ class ScoutTests(unittest.TestCase):
 
     def test_submissions(self):
         """Settings > Scout > Submissions: open pull requests on the voice list, checked twice, one plain verdict."""
-        api = "https://api.github.com/repos/glenndall/yakscout-voices"
+        api = "https://api.github.com/repos/glenndall/scout-voices"
         e1 = {"id": "farm-0003", "channels": ["A", "B"], "examples": ["aaaaaaaaaaa", "bbbbbbbbbbb"], "print": [0.0] * 512}
         e2 = dict(e1, id="farm-0004", examples=["ccccccccccc", "ddddddddddd"])
         pages = {f"{api}/pulls?state=open&per_page=10": [{"number": 7, "title": "Add farm-0003", "html_url": "https://gh/7",
