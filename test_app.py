@@ -1254,6 +1254,15 @@ class ScoutTests(unittest.TestCase):
         self.assertIsNotNone(c.execute("SELECT 1 FROM scout WHERE video_id='kept0000000'").fetchone())   # brought back: kept
         c.close()
 
+    def test_facts_survive_restart(self):
+        c = app.connect()
+        app.SCOUT_LINK.update(secs=3.1, last=int(time.time()) - 120)
+        app.scout_save(c, "secs", "3.10"); app.scout_save(c, "last", str(app.SCOUT_LINK["last"])); c.commit(); c.close()
+        app.SCOUT_LINK.update(secs=0.0, last=0)                               # a restart forgets them...
+        app.init_db()                                                         # ...and reads them back
+        self.assertEqual((app.SCOUT_LINK["secs"], app.SCOUT_LINK["last"] > 0), (3.1, True))
+        app.SCOUT_LINK.update(secs=0.0, last=0)
+
     def test_page_routes(self):
         """The Settings > Scout page and what it posts to."""
         c = app.connect()

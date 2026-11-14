@@ -116,6 +116,10 @@ def init_db():
         c.execute("UPDATE profiles SET pos=id")
     for k, v in c.execute("SELECT k, v FROM settings WHERE k LIKE 'scout_%'"):        # Settings: Scout
         SCOUT_CFG[k[6:]] = v
+    try:                                                                               # the facts line after a restart
+        SCOUT_LINK.update(secs=float(SCOUT_CFG["secs"]), last=int(SCOUT_CFG["last"]))
+    except (ValueError, NameError):
+        pass
     for k, v in c.execute("SELECT k, v FROM settings WHERE k IN ('gl','hl')"):        # Settings: region and language
         REGION[k] = v
     c.close()
@@ -410,7 +414,8 @@ SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > Yak
              "on": "0", "addr": "", "port": "8095",             #   the YakScout plugin: on/off, where it is
              "seen": "0",                                       #   and when it last answered
              "min": "", "days": "60",                           # Advanced: drop at (blank: SCOUT_MIN), remember for,
-             "review": "0"}                                     #   Submissions: Share on ready voices, the open list
+             "review": "0",                                     #   Submissions: Share on ready voices, the open list
+             "secs": "0", "last": "0"}                          # seconds a Short, last scan (kept over restarts)
 SCOUT_MIN = int(os.environ.get("YAK_SCOUT_MIN", "50"))          # score (0-100) at which a Short counts as a farm's
 SCOUT_PER_RUN = 80                                              # Shorts judged per batch (the rest wait for the next)
 
@@ -721,6 +726,8 @@ def scout_link_once():
             return 60
         took = time.time() - t
         SCOUT_LINK.update(secs=took if not SCOUT_LINK["secs"] else 0.9 * SCOUT_LINK["secs"] + 0.1 * took, last=int(time.time()))
+        scout_save(c, "secs", f'{SCOUT_LINK["secs"]:.2f}')
+        scout_save(c, "last", str(SCOUT_LINK["last"]))
         score = r.get("score")
         if isinstance(score, int) and 0 <= score <= 100:
             scout_verdict(c, vid, score, [str(x)[:80] for x in r.get("why", [])[:8]])
@@ -2659,6 +2666,10 @@ try{var sy=sessionStorage.getItem("yak-scout-y");if(sy!==null){sessionStorage.re
 var KEY="yak-scout-open";try{(sessionStorage.getItem(KEY)||"").split(",").forEach(function(id){var d=id&&document.getElementById(id);if(d)d.open=true})}catch(e){}
 p.querySelectorAll("details.fold").forEach(function(d){d.addEventListener("toggle",function(){try{sessionStorage.setItem(KEY,
   [].map.call(p.querySelectorAll("details.fold[open]"),function(x){return x.id}).join(","))}catch(e){}})});
+function subs(){fetch("/settings").then(function(r){return r.text()}).then(function(h){   // Submissions on/off, in place
+  var d=new DOMParser().parseFromString(h,"text/html"),nv=d.querySelector("#sf-voice .sclist"),ov=p.querySelector("#sf-voice .sclist");
+  if(nv&&ov)ov.innerHTML=nv.innerHTML;var ns=d.getElementById("sf-subs"),os=document.getElementById("sf-subs");
+  if(os)os.remove();if(ns)document.getElementById("sf-voice").after(ns)}).catch(function(){})}
 function count(d){var n=d.querySelector(".n");if(n)n.textContent="· "+d.querySelectorAll(".item").length}
 p.addEventListener("input",function(ev){var k=ev.target.dataset.filter;if(k){var q=ev.target.value.toLowerCase();
   document.querySelectorAll("#sf-"+k+" .item").forEach(function(r){r.hidden=q&&r.dataset.q.indexOf(q)<0})}
@@ -2668,7 +2679,7 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
   var b=ev.target.closest("button");if(!b)return;
   if(b.dataset.k){var on=!b.classList.contains("on");b.classList.toggle("on",on);b.setAttribute("aria-checked",on);
     b.firstChild.nodeValue=on?"On":"Off";var sv=post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again();
-    if(b.dataset.k=="review")sv.then(now)}
+    if(b.dataset.k=="review")sv.then(subs)}
   else if(b.dataset.keep){post("/scout/keep","v="+b.dataset.keep);var s=document.createElement("span");s.className="sdone";
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
