@@ -663,7 +663,7 @@ def scout_keep(c, vid):
 # (it hears the synthetic voices farms reuse). YakTube connects to it at the address set in Settings, asks how it is
 # (GET /status) and hands it Shorts one at a time (POST /look); what it says is added to the title/caption check's
 # score. When it's off, asleep or can't be reached, YakTube carries on without it and tries again a minute later.
-SCOUT_LINK = {"state": "", "error": "", "voices": [], "version": "", "up": 0,   # state: "" (not tried yet), ok, down, off
+SCOUT_LINK = {"state": "", "error": "", "voices": [], "version": "", "up": 0, "lists": [],   # state: "" (not tried yet), ok, down, off
               "secs": 0.0, "last": 0}                             # seconds a Short (averaged), when it last scanned one
 SCOUT_FAILS = {}                                                # Shorts it couldn't scan: given up on after 2 tries
 SCOUT_WAKE = threading.Event()                                  # Settings changed: try now, not in a minute
@@ -693,7 +693,8 @@ def scout_link_once():
         SCOUT_LINK.update(state="down", error=str(ex)[:120])
         return 60
     SCOUT_LINK.update(state="ok", error="", voices=[v for v in st.get("voices", []) if isinstance(v, dict)][:50],
-                      version=str(st.get("scout", ""))[:20], up=st.get("up") if isinstance(st.get("up"), int) else 0)
+                      version=str(st.get("scout", ""))[:20], up=st.get("up") if isinstance(st.get("up"), int) else 0,
+                      lists=[l for l in st.get("lists", []) if isinstance(l, dict)][:10] if isinstance(st.get("lists"), list) else [])
     c = connect()
     try:
         now = int(time.time())
@@ -820,9 +821,19 @@ def scout_pane(c):
         names = [str(x) for x in v.get("channel_names", [])][:6] if isinstance(v.get("channel_names"), list) else []
         bits = [f'{n} channel{"s" if n != 1 else ""}' + (": " + ", ".join(names) if names else "")] if n else []
         return " · ".join(bits + ([f'learned {v["learned"]}'] if v.get("learned") else []))
-    vlist = "".join(item(f'{v.get("name", "")} {vsub(v)}', e(str(v.get("name", "?"))), e(vsub(v)),
-                         f'<button type="button" class="x" data-forget="{e(str(v.get("name", "")))}" aria-label="Forget">×</button>')
-                    for v in voices)
+    def vbtn(v):
+        n = e(str(v.get("name", "")))
+        share = (f'<a class="btn ghost small" href="/scout/share?name={urllib.parse.quote(str(v.get("name", "")))}" download '
+                 'title="A file to send to the shared voice list">Share</a>') if v.get("source") != "shared" else ""
+        return share + (f'<button type="button" class="x" data-forget="{n}" aria-label="'
+                        f'{"Hide here" if v.get("source") == "shared" else "Forget"}">×</button>')
+    vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', e(str(v.get("name", "?"))),
+                         f'<span class="tag">{"Shared" if v.get("source") == "shared" else "Learned"}</span>{e(vsub(v))}',
+                         vbtn(v)) for v in voices)
+    lists = SCOUT_LINK["lists"] if st == "ok" else []
+    vinfo = "".join(f'<div class="empty">Shared list: {l.get("count", 0)} voices · '
+                    f'{"updated " + ago(l["fetched"]) if l.get("fetched") else "not downloaded yet"}'
+                    f'{" · " + e(str(l["error"])[:60]) if l.get("error") else ""}</div>' for l in lists)
     # the log: what was judged lately
     log = c.execute("SELECT s.video_id, s.score, s.farm, s.why, s.at, s.deep, v.title, v.channel_title FROM scout s "
                     "LEFT JOIN videos v ON v.id=s.video_id ORDER BY s.at DESC LIMIT 100").fetchall()
@@ -852,7 +863,7 @@ def scout_pane(c):
             fold("keep", "Never drop", len(ls["keep"]), keeps or none, add("keep", "Channel name")) +
             fold("voice", "Voices", len(voices), vlist or ('<div class="empty">None learned yet.</div>' if st == "ok" else
                  '<div class="empty">Shows when YakScout is connected.</div>'),
-                 add("voice", "Link to a farm Short", "Learn") if st == "ok" else "") +
+                 (add("voice", "Link to a farm Short", "Learn") + vinfo) if st == "ok" else "") +
             fold("log", "Log", len(log), logs or none,
                  '<div class="tools"><input type="search" placeholder="Search" data-filter="log" aria-label="Search">'
                  '<a class="btn ghost small" href="/scout/log.csv" download>Download CSV</a></div>') +
@@ -2749,7 +2760,7 @@ class App(BaseHTTPRequestHandler):
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/tv/more"): self.tv_more, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("GET", "/settings"): self.settings,
-                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
+                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/share"): self.scout_share, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
                 return self.send(layout("Not found", '<div class="empty"><h1>Not found</h1></div>', self.prof), 404)
@@ -3639,6 +3650,19 @@ class App(BaseHTTPRequestHandler):
                         "Scanned" if r["deep"] else "Read", r["score"], r["title"] or "", r["channel_title"] or "",
                         r["why"] or "", "https://www.youtube.com/shorts/" + r["video_id"]])
         return "\ufeff" + out.getvalue()                                    # the mark tells Excel it's UTF-8
+
+    def scout_share(self):
+        """Settings > YakScout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""
+        name = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("name", [""])[0]
+        if SCOUT_LINK["state"] != "ok" or not name:
+            return self.send("YakScout isn't connected", 503, ctype="text/plain; charset=utf-8")
+        try:
+            entry = scout_call("/share?name=" + urllib.parse.quote(name), timeout=10)
+        except Exception:
+            return self.send("YakScout couldn't share that voice", 502, ctype="text/plain; charset=utf-8")
+        fname = re.sub(r"[^a-z0-9-]", "-", str(entry.get("id", "voice")))[:40]
+        self.send(json.dumps(entry, indent=1), ctype="application/json",
+                  headers=[("Content-Disposition", f'attachment; filename="voice-{fname}.json"')])
 
     def scout_backup(self):
         """Settings > YakScout > Advanced > Backup: a .zip with backup.json (your channel lists, the Shorts you brought

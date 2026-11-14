@@ -1099,6 +1099,8 @@ class ScoutTests(unittest.TestCase):
             def do_GET(self):
                 if self.path == "/voices":
                     return self.answer(200, {"voices": [{"name": "v1", "channels": ["A", "B"], "print": [0.0] * 512}]})
+                if self.path.startswith("/share"):
+                    return self.answer(200, {"id": "tbqta6u4lem", "model": "m", "channels": ["Drip Dyl"], "print": [0.0] * 512})
                 self.answer(200, {"scout": "0.2", "busy": False, "voices": [{"name": "tbQTA6u4lEM", "channels": 4, "learned": "Nov 13"}]})
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -1282,8 +1284,17 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(call("/scout/voice", op="learn", v="hello")[0], 400)
         self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 200)
         self.assertEqual(seen, ["learn AeyLzuVhr1s", "forget tbQTA6u4lEM"])
+        app.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
+        app.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
         page = call("/settings")[1]
         self.assertIn("2 channels: Drip Dyl, Volze", page)
+        self.assertIn('<span class="tag">Learned</span>', page)
+        self.assertIn('<span class="tag">Shared</span>', page)
+        self.assertIn('href="/scout/share?name=tbQTA6u4lEM"', page)                       # Share: learned voices only
+        self.assertNotIn('href="/scout/share?name=farm-0002"', page)
+        self.assertIn("Shared list: 2 voices · updated 2 hours ago", page)
+        code, body = call("/scout/share?name=tbQTA6u4lEM")
+        self.assertEqual((code, json.loads(body)["id"]), (200, "tbqta6u4lem"))
         self.assertIn("<b>2.4 s</b> a Short", page)
         self.assertIn("Up <b>2 hours</b>", page)
         self.assertIn("Plugin <b>v0.4</b>", page)
