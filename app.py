@@ -410,8 +410,8 @@ def fetch_outside(pages, keep):
 # Scout makes of any Short and why, and the log says what was dropped. It only ever judges Shorts from outside your
 # subscriptions, and when YouTube won't answer it lets the Short through.
 SCOUT = os.environ.get("YAK_SCOUT", "1") != "0"                 # the title/caption check's default (Settings can change it)
-SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > YakScout, saved as scout_<k> in settings:
-             "on": "0", "addr": "", "port": "8095",             #   the YakScout plugin: on/off, where it is
+SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > Scout, saved as scout_<k> in settings:
+             "on": "0", "addr": "", "port": "8095",             #   the Scout plugin: on/off, where it is
              "seen": "0",                                       #   and when it last answered
              "min": "", "days": "60",                           # Advanced: drop at (blank: SCOUT_MIN), remember for,
              "review": "0",                                     #   Submissions: Share on ready voices, the open list
@@ -421,7 +421,7 @@ SCOUT_PER_RUN = 80                                              # Shorts judged 
 
 
 def scout_min():
-    """The score that drops a Short: Settings > YakScout > Advanced, or YAK_SCOUT_MIN."""
+    """The score that drops a Short: Settings > Scout > Advanced, or YAK_SCOUT_MIN."""
     v = SCOUT_CFG.get("min") or ""
     return int(v) if v.isdigit() else SCOUT_MIN
 
@@ -524,7 +524,7 @@ def scout_found(c):
 
 
 def scout_lists(c):
-    """The channels you've set in Settings > YakScout, by kind: farm (always drop), keep (never drop) and ok (one Scout
+    """The channels you've set in Settings > Scout, by kind: farm (always drop), keep (never drop) and ok (one Scout
     found that you took off the farm list). {kind: {lower-case name: name}}."""
     out = {"farm": {}, "keep": {}, "ok": {}}
     for key, name, kind in c.execute("SELECT key, name, kind FROM scout_chan ORDER BY at DESC"):
@@ -573,7 +573,7 @@ def scout_outside(c):
         now = int(time.time())
         for i, (v, r) in enumerate(got):
             old = c.execute("SELECT score, why, kept FROM scout WHERE video_id=?", (v,)).fetchone()
-            if old:     # the YakScout plugin got to it while this check ran: add to its verdict, don't replace it
+            if old:     # the Scout plugin got to it while this check ran: add to its verdict, don't replace it
                 total = min(100, old["score"] + r["score"])
                 why = [x for x in r["why"] if x != "no data"] + [x for x in (old["why"] or "").split("; ") if x]
                 got[i] = (v, {"score": total, "farm": int(total >= scout_min() and not old["kept"]
@@ -606,7 +606,7 @@ def scout_queue(c, n=10):
 
 
 def scout_verdict(c, vid, score, why):
-    """The YakScout plugin's verdict on the video itself. Adds to what the title/caption check already found; if the
+    """The Scout plugin's verdict on the video itself. Adds to what the title/caption check already found; if the
     total reaches the drop score the Short leaves the list at once (never one you brought back, or from a channel on
     your Never drop list). Returns whether it was dropped."""
     old = c.execute("SELECT score, why, kept FROM scout WHERE video_id=?", (vid,)).fetchone()
@@ -624,7 +624,7 @@ def scout_verdict(c, vid, score, why):
 
 
 def scout_set_channel(c, kind, name, add=True):
-    """Settings > YakScout: add a channel to (or take it off) the Farm channels or Never drop list. Adding a farm channel
+    """Settings > Scout: add a channel to (or take it off) the Farm channels or Never drop list. Adding a farm channel
     drops its Shorts from the list now; adding one to Never drop brings its dropped Shorts back. Taking a channel
     Scout found off the farm list stops it being treated as one. Returns False if the name is no good."""
     name = " ".join(name.split())[:100]
@@ -668,7 +668,7 @@ def scout_keep(c, vid):
     return True
 
 
-# The YakScout plugin (Settings > YakScout): `scout.py` running on this NAS (Docker) or another computer on the network; it listens to the start of each Short
+# The Scout plugin (Settings > Scout): `scout.py` running on this NAS (Docker) or another computer on the network; it listens to the start of each Short
 # (it hears the synthetic voices farms reuse). YakTube connects to it at the address set in Settings, asks how it is
 # (GET /status) and hands it Shorts one at a time (POST /look); what it says is added to the title/caption check's
 # score. When it's off, asleep or can't be reached, YakTube carries on without it and tries again a minute later.
@@ -692,7 +692,7 @@ def scout_save(c, k, v):
 
 
 def scout_link_once():
-    """One step of talking to the YakScout plugin. Returns how many seconds to wait before the next."""
+    """One step of talking to the Scout plugin. Returns how many seconds to wait before the next."""
     if SCOUT_CFG["on"] != "1" or not SCOUT_CFG["addr"]:
         SCOUT_LINK.update(state="off", error="")
         return 30
@@ -748,8 +748,8 @@ def scout_link_loop():
         SCOUT_WAKE.clear()
 
 
-# Settings > YakScout > Submissions: the open pull requests on the shared voice list, each checked twice at home:
-# the YakScout plugin listens to its example Shorts (same voice?), and the titles & captions check reads them (farm
+# Settings > Scout > Submissions: the open pull requests on the shared voice list, each checked twice at home:
+# the Scout plugin listens to its example Shorts (same voice?), and the titles & captions check reads them (farm
 # clues?). GitHub's servers can't do the listening (YouTube blocks them), so it happens here. Merging stays on GitHub.
 SCOUT_LIST_REPO = os.environ.get("YAK_SCOUT_LIST_REPO", "glenndall/yakscout-voices")
 SCOUT_REVIEW = {"at": 0, "error": "", "items": [], "synced": 0, "sync_ok": False}
@@ -788,7 +788,7 @@ def scout_pr_info(pr):
 
 
 def scout_sync_open(get=None, now=None):
-    """When Settings > YakScout opens (at most once a minute): ask GitHub which submissions are still open, so merged
+    """When Settings > Scout opens (at most once a minute): ask GitHub which submissions are still open, so merged
     or closed ones leave the list, and new or changed ones show "Not checked yet". Quick: no listening."""
     now = now or int(time.time())
     if now - SCOUT_REVIEW["synced"] < 60:
@@ -848,7 +848,7 @@ def scout_judge_entry(entry, verify=None, text=None):
 
 
 def scout_review(get=gh_get, verify=None, text=None):
-    """Check every open submission (Settings > YakScout > Submissions > Check)."""
+    """Check every open submission (Settings > Scout > Submissions > Check)."""
     try:
         subs = scout_submissions(get)
         items = []
@@ -878,7 +878,7 @@ def scout_badge(why):
 
 
 def scout_stats(c):
-    """The live part of Settings > YakScout (the page asks for it every few seconds): the connection badge, today's
+    """The live part of Settings > Scout (the page asks for it every few seconds): the connection badge, today's
     counts and the plugin's facts line."""
     on = SCOUT_CFG["on"] == "1" and SCOUT_CFG["addr"]
     seen = int(SCOUT_CFG["seen"] or 0)
@@ -904,7 +904,7 @@ def scout_stats(c):
 
 
 def scout_pane(c):
-    """Settings > YakScout: everything YakScout does, in one place. The lists fold away; each can be searched."""
+    """Settings > Scout: everything Scout does, in one place. The lists fold away; each can be searched."""
     live = scout_stats(c)
     st = live["state"]
 
@@ -939,7 +939,7 @@ def scout_pane(c):
                          f'<img src="https://i.ytimg.com/vi/{r["video_id"]}/oar2.jpg" alt="" loading="lazy">') for r in rows)
     # channels
     ls, found = scout_lists(c), scout_found(c)
-    farm = [(n, f"Found by YakScout · {k} dropped") for n, k in sorted(found.items(), key=lambda x: -x[1])
+    farm = [(n, f"Found by Scout · {k} dropped") for n, k in sorted(found.items(), key=lambda x: -x[1])
             if n.lower() not in ls["ok"] and n.lower() not in ls["keep"] and n.lower() not in ls["farm"]]
     farm = [(n, "Added by you") for n in ls["farm"].values()] + farm
     x = lambda kind, n: f'<button type="button" class="x" data-rm="{kind}" data-name="{e(n)}" aria-label="Remove {e(n)}">×</button>'
@@ -958,7 +958,7 @@ def scout_pane(c):
         q = urllib.parse.quote(str(v.get("name", "")))
         share = ""
         if v.get("source") != "shared":                   # the shared list wants 2+ channels and 2+ Shorts: shown always
-            # (an older YakScout that doesn't count Shorts is judged on channels alone)
+            # (an older Scout that doesn't count Shorts is judged on channels alone)
             chans = v["channels"] if isinstance(v.get("channels"), int) else 0
             more = [f'{k} more {w}{"s" if k > 1 else ""}' for k, w in ((2 - chans, "channel"), (2 - v.get("examples", 2), "Short"))
                     if k > 0]                               # red: the first thing missing (a channel brings a Short); green: ready
@@ -1008,14 +1008,14 @@ def scout_pane(c):
                         f'<span class="tag">{"Scanned" if r["deep"] else "Read"}</span>') for r in log)
     lo = scout_min()
     days = SCOUT_CFG["days"] if SCOUT_CFG["days"] in ("30", "60", "90") else "60"
-    return (f'<section class="spane scp" id="p-scout" hidden><div class="sch"><h2>YakScout</h2><span class="chip {live["chip"]}" '
+    return (f'<section class="spane scp" id="p-scout" hidden><div class="sch"><h2>Scout</h2><span class="chip {live["chip"]}" '
             f'id="sc-chip" title="{e(live["error"])}"><i></i><span>{live["text"]}</span></span></div>'
             '<p>Keeps content-farm Shorts out. AI-made is fine.</p>'
             f'<div class="stats"><div class="stat"><b id="sc-scanned">{live["scanned"]}</b><span>Scanned today</span></div>'
             f'<div class="stat"><b id="sc-dropped">{live["dropped"]}</b><span>Dropped today</span></div>'
             f'<div class="stat"><b id="sc-waiting">{live["waiting"]}</b><span>Waiting</span></div></div>'
             '<h3>Checks</h3><div class="card">' + switch("text", "Titles &amp; captions", "Built in") +
-            switch("on", "Scan voices", "Needs the YakScout plugin") + '</div>'
+            switch("on", "Scan voices", "Needs the Scout plugin") + '</div>'
             '<h3>Connection</h3><div class="card"><form class="chk addr" id="scaddr"><label class="fld wide"><span>Address</span>'
             f'<input name="addr" value="{e(SCOUT_CFG["addr"])}" placeholder="192.168.1.31" inputmode="url" autocapitalize="off" '
             'autocorrect="off" spellcheck="false"></label><label class="fld port"><span>Port</span>'
@@ -1027,7 +1027,7 @@ def scout_pane(c):
             fold("farm", "AI-Farm channels", len(farm), farms or none, add("farm", "Channel name") + search("farm")) +
             fold("keep", "Never drop", len(ls["keep"]), keeps or none, add("keep", "Channel name")) +
             fold("voice", "Voices", len(voices), vlist or ('<div class="empty">None learned yet.</div>' if st == "ok" else
-                 '<div class="empty">Shows when YakScout is connected.</div>'),
+                 '<div class="empty">Shows when Scout is connected.</div>'),
                  (add("voice", "Link to a farm Short", "Learn") + vinfo) if st == "ok" else "") +
             (fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
                   subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["sync_ok"] else ""),
@@ -1039,7 +1039,7 @@ def scout_pane(c):
             '<details class="card fold" id="sf-adv"><summary>Advanced</summary>'
             f'<div class="chk"><div>Drop at<small>Lower drops more</small></div><div class="slider"><input type="range" min="30" '
             f'max="90" step="5" value="{lo}" data-set="min" aria-label="Drop at"><b>{lo}</b></div></div>'
-            '<div class="chk"><div>Remember for<small>Then YakScout looks again</small></div><select class="btn ghost small" '
+            '<div class="chk"><div>Remember for<small>Then Scout looks again</small></div><select class="btn ghost small" '
             'data-set="days" aria-label="Remember for">' + "".join(
                 f'<option value="{d}"{" selected" if d == days else ""}>{d} days</option>' for d in ("30", "60", "90")) +
             '</select></div>' + switch("review", "Submissions", "Share voices, check the list") +
@@ -1865,7 +1865,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .sbtns[hidden],.sask[hidden],.sopts[hidden],.sopt[hidden],.spane[hidden]{display:none}.bar .sask{flex-basis:100%}.bar .sask p{margin:0 0 10px}
 form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!important;box-shadow:none!important}
 @media(max-width:720px){.sets{grid-template-columns:minmax(0,1fr)}.sets>*{min-width:0}.slist{border:0;padding:0}.spane{padding-top:16px}.scp .stats{gap:8px}.scp .stat{padding:10px 12px;min-width:0}.scp .stat b{font-size:21px}.scp .stat span{font-size:12px}}
-/* Settings > YakScout: a wider page than the others, left-aligned, in sections */
+/* Settings > Scout: a wider page than the others, left-aligned, in sections */
 .spane.scp{align-items:stretch;text-align:left;max-width:640px;width:100%;margin:0 auto;padding-top:28px}   /* centred like the others */
 .scp .sch{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}.scp .sch h2{margin:0}
 .spane.scp>p{align-self:center;text-align:center}
@@ -2662,7 +2662,7 @@ var hc=document.getElementById("p-hidden");if(hc)hc.addEventListener("click",fun
   post("/hide","c="+b.dataset.c+"&undo=1&js=1");var s=document.createElement("span");s.className="sdone";s.textContent="Back";
   b.parentNode.classList.add("back");b.replaceWith(s);var l=hc.querySelectorAll("button[data-c]");(l[0]||document.getElementById("r-hidden")).focus()})})()</script>"""
 
-# Settings > YakScout: the switches save straight away; Save checks the address (YakTube then tries to connect, and the
+# Settings > Scout: the switches save straight away; Save checks the address (YakTube then tries to connect, and the
 # page comes back a few seconds later to show whether it could); Bring back returns a Short to the Shorts list. The
 # lists fold away (the page remembers which were open) and can be searched; channels are added and removed in place.
 SCOUT_JS = """<script>(function(){var p=document.getElementById("p-scout");if(!p)return;
@@ -3722,7 +3722,7 @@ class App(BaseHTTPRequestHandler):
         add("search", "Clear search history",
             f"Removes {name}'s {n} search{'es' if n != 1 else ''}." if n else "No searches remembered.",
             ask("search", "Clear search history") if n else "")
-        rows.append('<h4>Plugins</h4><button type="button" class="srow" data-p="scout" id="r-scout">YakScout</button>')
+        rows.append('<h4>Plugins</h4><button type="button" class="srow" data-p="scout" id="r-scout">Scout</button>')
         panes.append(scout_pane(self.db))
         rows.append("<h4>About</h4>")
         ua = self.headers.get("User-Agent", "")
@@ -3749,7 +3749,7 @@ class App(BaseHTTPRequestHandler):
         self.send("", 400)
 
     def settings_scout(self):
-        """Settings > YakScout: the two switches, and where the YakScout plugin is (an address, or address:port)."""
+        """Settings > Scout: the two switches, and where the Scout plugin is (an address, or address:port)."""
         f = self.form()
         k, v = f.get("k", ""), f.get("v", "").strip()
         if k == "review" and v in ("0", "1"):              # only what Settings shows: no need to reconnect
@@ -3787,21 +3787,21 @@ class App(BaseHTTPRequestHandler):
         self.send("", 204 if VID_RE.match(vid) and scout_keep(self.db, vid) else 400)
 
     def scout_channel(self):
-        """Settings > YakScout: add a channel to Farm channels or Never drop, or take it off."""
+        """Settings > Scout: add a channel to Farm channels or Never drop, or take it off."""
         f = self.form()
         ok = scout_set_channel(self.db, f.get("kind", ""), f.get("v", ""), f.get("op") != "remove")
         self.send(json.dumps({"ok": True} if ok else {"error": "Type a channel name"}), 200 if ok else 400,
                   ctype="application/json")
 
     def scout_voice(self):
-        """Settings > YakScout > Voices: have the YakScout plugin learn a farm Short's voice, or forget one."""
+        """Settings > Scout > Voices: have the Scout plugin learn a farm Short's voice, or forget one."""
         f = self.form()
         op, v = f.get("op", ""), f.get("v", "").strip()
 
         def answer(obj, code=200):
             self.send(json.dumps(obj), code, ctype="application/json")
         if SCOUT_LINK["state"] != "ok":
-            return answer({"error": "YakScout isn't connected"}, 503)
+            return answer({"error": "Scout isn't connected"}, 503)
         try:
             if op == "learn":
                 vid = video_id_from(v)
@@ -3820,9 +3820,9 @@ class App(BaseHTTPRequestHandler):
                 why = json.loads(ex.read()).get("error", "")
             except Exception:
                 why = ""
-            return answer({"error": (why or "YakScout couldn't do it")[:120].capitalize()}, 502)
+            return answer({"error": (why or "Scout couldn't do it")[:120].capitalize()}, 502)
         except Exception:
-            return answer({"error": "YakScout didn't answer"}, 502)
+            return answer({"error": "Scout didn't answer"}, 502)
         SCOUT_WAKE.set()                                             # fetch the new voice list
         answer({"ok": True, "msg": msg})
 
@@ -3830,8 +3830,8 @@ class App(BaseHTTPRequestHandler):
         self.send(json.dumps(scout_stats(self.db)), ctype="application/json", headers=[("Cache-Control", "no-store")])
 
     def scout_log_csv(self):
-        """Settings > YakScout > Log: every verdict YakScout still remembers, one row per Short, for a spreadsheet."""
-        name = time.strftime("yakscout-log-%Y-%m-%d.csv")
+        """Settings > Scout > Log: every verdict Scout still remembers, one row per Short, for a spreadsheet."""
+        name = time.strftime("scout-log-%Y-%m-%d.csv")
         self.send(self.scout_log_text(), ctype="text/csv; charset=utf-8",
                   headers=[("Content-Disposition", f'attachment; filename="{name}"'), ("Cache-Control", "no-store")])
 
@@ -3848,7 +3848,7 @@ class App(BaseHTTPRequestHandler):
         return "\ufeff" + out.getvalue()                                    # the mark tells Excel it's UTF-8
 
     def scout_review_route(self):
-        """Settings > YakScout > Submissions > Check: check every open submission now (takes a while: it listens)."""
+        """Settings > Scout > Submissions > Check: check every open submission now (takes a while: it listens)."""
         r = scout_review()
         self.send(json.dumps({"ok": not r["error"], "error": r["error"], "n": len(r["items"])}), ctype="application/json")
 
@@ -3871,20 +3871,20 @@ class App(BaseHTTPRequestHandler):
         self.redirect(url + urllib.parse.urlencode(q))
 
     def scout_share(self):
-        """Settings > YakScout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""
+        """Settings > Scout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""
         name = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("name", [""])[0]
         if SCOUT_LINK["state"] != "ok" or not name:
-            return self.send("YakScout isn't connected", 503, ctype="text/plain; charset=utf-8")
+            return self.send("Scout isn't connected", 503, ctype="text/plain; charset=utf-8")
         try:
             entry = scout_call("/share?name=" + urllib.parse.quote(name), timeout=10)
         except Exception:
-            return self.send("YakScout couldn't share that voice", 502, ctype="text/plain; charset=utf-8")
+            return self.send("Scout couldn't share that voice", 502, ctype="text/plain; charset=utf-8")
         fname = re.sub(r"[^a-z0-9-]", "-", str(entry.get("id", "voice")))[:40]
         self.send(json.dumps(entry, indent=1), ctype="application/json",
                   headers=[("Content-Disposition", f'attachment; filename="voice-{fname}.json"')])
 
     def scout_backup(self):
-        """Settings > YakScout > Advanced > Backup: a .zip with backup.json (your channel lists, the Shorts you brought
+        """Settings > Scout > Advanced > Backup: a .zip with backup.json (your channel lists, the Shorts you brought
         back, the Advanced settings and, while the plugin is connected, its learned voices: what Restore reads back)
         and log.csv (every verdict, for reading)."""
         voices = []
@@ -3907,12 +3907,12 @@ class App(BaseHTTPRequestHandler):
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("backup.json", json.dumps(out, indent=1))
             z.writestr("log.csv", self.scout_log_text())
-        name = time.strftime("yakscout-backup-%Y-%m-%d.zip")
+        name = time.strftime("scout-backup-%Y-%m-%d.zip")
         self.send(buf.getvalue(), ctype="application/zip",
                   headers=[("Content-Disposition", f'attachment; filename="{name}"'), ("Cache-Control", "no-store")])
 
     def scout_restore(self):
-        """Settings > YakScout > Advanced > Restore: read a Backup file back in. Adds to what's there (nothing is
+        """Settings > Scout > Advanced > Restore: read a Backup file back in. Adds to what's there (nothing is
         removed): channels go back on their lists, Shorts you brought back stay back, voices go to the plugin."""
         def answer(obj, code=200):
             self.send(json.dumps(obj), code, ctype="application/json")
@@ -3929,9 +3929,9 @@ class App(BaseHTTPRequestHandler):
                     raw = z.read(info)
             b = json.loads(raw.decode("utf-8-sig"))
         except (ValueError, zipfile.BadZipFile, UnicodeDecodeError):
-            return answer({"error": "Not a YakScout backup"}, 400)
+            return answer({"error": "Not a Scout backup"}, 400)
         if not isinstance(b, dict) or b.get("yakscout_backup") != 1:
-            return answer({"error": "Not a YakScout backup"}, 400)
+            return answer({"error": "Not a Scout backup"}, 400)
         c, got = self.db, {"channels": 0, "back": 0, "voices": 0}
         for ch in b.get("channels", []) if isinstance(b.get("channels"), list) else []:
             if not (isinstance(ch, dict) and isinstance(ch.get("name"), str)):
@@ -3961,9 +3961,9 @@ class App(BaseHTTPRequestHandler):
                 got["voices"] = int(scout_call("/voices", {"voices": voices}, timeout=60).get("added", 0))
                 SCOUT_WAKE.set()
             except Exception:
-                skipped = " · voices not restored (YakScout didn't answer)"
+                skipped = " · voices not restored (Scout didn't answer)"
         elif voices:
-            skipped = " · voices not restored (YakScout isn't connected)"
+            skipped = " · voices not restored (Scout isn't connected)"
         answer({"ok": True, "msg": f'Restored {got["channels"]} channels, {got["back"]} brought back, '
                                    f'{got["voices"]} voices{skipped}'})
 

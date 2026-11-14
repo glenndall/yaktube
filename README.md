@@ -16,10 +16,10 @@
 
 | | |
 |---|---|
-| ![YakScout settings on a computer (light theme), with the Dropped list open](docs/screenshots/yakscout-dropped-computer-light.png) | ![YakScout's AI-Farm channels and shared Voices lists (dark theme)](docs/screenshots/yakscout-lists-computer-dark.png) |
-| **YakScout settings** (computer, light): farm Shorts it caught, each with what gave it away and **Bring back** | **YakScout lists** (computer, dark): AI-Farm channels it found, and the shared list of farm voices |
-| ![The TV app's Home with the side panel open](docs/screenshots/tv-home-side-panel-open.jpg) | ![YakTube on a phone: Home (light) and YakScout settings (dark)](docs/screenshots/phone-home-and-yakscout.jpg) |
-| **TV app** (Google TV, Android TV, Fire TV): Home with the side panel open | **Phone:** Home (light theme) and YakScout settings (dark theme) |
+| ![Scout settings on a computer (light theme), with the Dropped list open](docs/screenshots/yakscout-dropped-computer-light.png) | ![Scout's AI-Farm channels and shared Voices lists (dark theme)](docs/screenshots/yakscout-lists-computer-dark.png) |
+| **Scout settings** (computer, light): farm Shorts it caught, each with what gave it away and **Bring back** | **Scout lists** (computer, dark): AI-Farm channels it found, and the shared list of farm voices |
+| ![The TV app's Home with the side panel open](docs/screenshots/tv-home-side-panel-open.jpg) | ![YakTube on a phone: Home (light) and Scout settings (dark)](docs/screenshots/phone-home-and-yakscout.jpg) |
+| **TV app** (Google TV, Android TV, Fire TV): Home with the side panel open | **Phone:** Home (light theme) and Scout settings (dark theme) |
 | ![Who's watching? with four profiles](docs/screenshots/profiles-whos-watching.png) | ![The Subscriptions feed on a computer (dark theme)](docs/screenshots/subscriptions-computer-dark.jpg) |
 | **Profiles:** each with its own history, subscriptions and recommendations | **Subscriptions** (computer, dark): newest uploads from your channels, with the Shorts switch |
 
@@ -44,8 +44,8 @@ the defaults.
 |---|---|---|
 | `YAK_REFRESH_MIN` | `30` | Minutes between checks for new videos from your subscriptions |
 | `YAK_DISCOVER_HOURS` | `6` | Hours between look-arounds for new Home / New to you suggestions (`0` = off) |
-| `YAK_SCOUT` | `1` | `0` starts with YakScout's title & caption check off (Settings → YakScout switches it any time) |
-| `YAK_SCOUT_MIN` | `50` | How sure YakScout must be (0-100) before it drops a Short; lower drops more, higher drops fewer |
+| `YAK_SCOUT` | `1` | `0` starts with Scout's title & caption check off (Settings → Scout switches it any time) |
+| `YAK_SCOUT_MIN` | `50` | How sure Scout must be (0-100) before it drops a Short; lower drops more, higher drops fewer |
 | `YAK_DB` | `./yaktube.db` | Where the database lives (Docker: `/data/yaktube.db`, already set) |
 | `YAK_PORT` | `8080` | Port to listen on (not for Docker, see below) |
 | `YAK_HOST` | `0.0.0.0` | Address to listen on; `127.0.0.1` keeps it to this computer only |
@@ -158,20 +158,20 @@ the defaults.
   wheel, arrow keys or ▲▼; on the TV, the remote. ✕ or Back closes it. Pasting a youtube.com/shorts/ link opens it here.
   Once an hour YakTube asks youtube.com/shorts for a new batch of ~40, as a visitor who isn't logged in, and keeps the
   newest 600. Watching Shorts doesn't change your Home suggestions.
-- **YakScout:** keeps content-farm Shorts out of that list: the faceless channels that churn out Shorts from one formula
+- **Scout:** keeps content-farm Shorts out of that list: the faceless channels that churn out Shorts from one formula
   to farm views and ad money. Being made with AI isn't what it looks for (people make clever, funny things with AI);
   the formula is. Two parts:
   - **Titles & captions** (built in): adds up clues from the title, description and auto-captions (copy-pasted channel
     descriptions, scripts that open "In this town, everyone …", melodramatic wording, minutes of non-stop fast
     narration, and only a little for saying it was made with AI). No one clue is enough on its own. To see what it
     makes of one Short: `python3 app.py scout <link or id>`.
-  - **Scan voices** (the optional [YakScout plugin](https://github.com/glenndall/yakscout), on the NAS with
+  - **Scan voices** (the optional [Scout plugin](https://github.com/glenndall/yakscout), on the NAS with
     Docker or on another computer): listens to the first 15 seconds of each Short and recognises the synthetic voices farms reuse
     across channels (2-4 seconds a Short). YakTube works the same without it.
 
   It never judges Shorts from your subscriptions, and lets a Short through if YouTube won't answer.
 
-**YakScout settings** (Settings → YakScout, under Plugins; the numbers at the top refresh by themselves)
+**Scout settings** (Settings → Scout, under Plugins; the numbers at the top refresh by themselves)
 - **How a Short is judged:** each new Short gets a score from 0 to 100 from the two checks above. Once the total
   reaches **Drop at** (50 to start) it leaves the Shorts list. Two lists overrule the score: **Never drop** always wins,
   then **AI-Farm channels**.
@@ -179,9 +179,9 @@ the defaults.
   plugin's version, seconds per Short, its last scan and uptime.
 - **Dropped:** what was taken out, newest first, and what caught it (*Story*, *Voice*, *Channel*, *Pasted*, *Text*).
   **Bring back** returns one for good.
-- **AI-Farm channels:** every Short from these is dropped unchecked. YakScout adds a channel itself once it has judged
+- **AI-Farm channels:** every Short from these is dropped unchecked. Scout adds a channel itself once it has judged
   3 or more of its Shorts and dropped over half; you can add one by name, which drops its Shorts already in the list.
-  **×** takes one off (one YakScout found stays off).
+  **×** takes one off (one Scout found stays off).
 - **Never drop:** channels whose Shorts are always kept, whatever they score. Adding one brings its dropped Shorts back.
 - **Voices:** the plugin's learned farm voices and the channels each was heard on. A voice on 2 or more channels drops
   a Short by itself (50 points); one from a single channel needs one more clue (35). Paste a farm Short's link and

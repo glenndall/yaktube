@@ -1274,7 +1274,7 @@ class ScoutTests(unittest.TestCase):
         call = self._app(pid)
         page = call("/settings")[1]
         for bit in ('id="sf-drop"', 'id="sf-farm"', 'id="sf-keep"', 'id="sf-voice"', 'id="sf-log"', 'id="sf-adv"',
-                    "Scanned today", 'data-set="min"', 'data-filter="drop"', "Shows when YakScout is connected."):
+                    "Scanned today", 'data-set="min"', 'data-filter="drop"', "Shows when Scout is connected."):
             self.assertIn(bit, page)
         self.assertIn('<b id="sc-dropped">1</b><span>Dropped today</span>', page)
         self.assertEqual(call("/settings/scout", k="min", v="65")[0], 204)
@@ -1357,7 +1357,7 @@ class ScoutTests(unittest.TestCase):
             except urllib.error.HTTPError as ex:
                 return ex.code, ex.headers, ex.read()
         code, hd, body = req("/scout/log.csv")                                     # the log, for a spreadsheet
-        self.assertIn("yakscout-log-", hd["Content-Disposition"])
+        self.assertIn("scout-log-", hd["Content-Disposition"])
         rows = body.decode("utf-8-sig").splitlines()
         self.assertEqual(rows[0], "Date,Verdict,Check,Score,Title,Channel,Reasons,Link")
         self.assertIn('Dropped,Scanned,65,"Farm, story 😳",Tales,world-rule opening,https://www.youtube.com/shorts/qd000000000',
@@ -1389,7 +1389,7 @@ class ScoutTests(unittest.TestCase):
         c.close()
 
     def test_submissions(self):
-        """Settings > YakScout > Submissions: open pull requests on the voice list, checked twice, one plain verdict."""
+        """Settings > Scout > Submissions: open pull requests on the voice list, checked twice, one plain verdict."""
         api = "https://api.github.com/repos/glenndall/yakscout-voices"
         e1 = {"id": "farm-0003", "channels": ["A", "B"], "examples": ["aaaaaaaaaaa", "bbbbbbbbbbb"], "print": [0.0] * 512}
         e2 = dict(e1, id="farm-0004", examples=["ccccccccccc", "ddddddddddd"])
