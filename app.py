@@ -2634,7 +2634,9 @@ var hc=document.getElementById("p-hidden");if(hc)hc.addEventListener("click",fun
 SCOUT_JS = """<script>(function(){var p=document.getElementById("p-scout");if(!p)return;
 function post(u,b){return fetch(u,{method:"POST",headers:{"Content-Type":"application/x-www-form-urlencoded"},body:b})}
 function again(){setTimeout(function(){location.replace("/settings#scout");location.reload()},2500)}
-function now(){location.replace("/settings#scout");location.reload()}
+function now(){try{sessionStorage.setItem("yak-scout-y",String(window.scrollY))}catch(e){}location.replace("/settings#scout");location.reload()}
+try{var sy=sessionStorage.getItem("yak-scout-y");if(sy!==null){sessionStorage.removeItem("yak-scout-y");
+  window.addEventListener("load",function(){window.scrollTo(0,+sy)})}}catch(e){}
 var KEY="yak-scout-open";try{(sessionStorage.getItem(KEY)||"").split(",").forEach(function(id){var d=id&&document.getElementById(id);if(d)d.open=true})}catch(e){}
 p.querySelectorAll("details.fold").forEach(function(d){d.addEventListener("toggle",function(){try{sessionStorage.setItem(KEY,
   [].map.call(p.querySelectorAll("details.fold[open]"),function(x){return x.id}).join(","))}catch(e){}})});
@@ -2652,7 +2654,8 @@ p.addEventListener("click",function(ev){var b=ev.target.closest("button");if(!b)
     b.closest(".item").remove();count(d)}
   else if(b.hasAttribute("data-review")){var rm2=b.nextElementSibling;b.disabled=true;rm2.className="msg";
     rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
-    .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}now()})
+    .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}
+      if(!j.n){b.disabled=false;rm2.textContent="None open.";return}now()})
     .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}
   else if(b.dataset.forget){var d2=b.closest("details");b.disabled=true;post("/scout/voice","op=forget&v="+encodeURIComponent(b.dataset.forget))
     .then(function(r){if(r.ok){b.closest(".item").remove();count(d2)}else b.disabled=false})}});
