@@ -20,6 +20,8 @@ YakTube reads a few environment variables (there's no `.env` file). Leave them o
 |---|---|---|
 | `YAK_REFRESH_MIN` | `30` | Minutes between checks for new videos from your subscriptions |
 | `YAK_DISCOVER_HOURS` | `6` | Hours between look-arounds for new Home / New to you suggestions (`0` = off) |
+| `YAK_SCOUT` | `1` | `0` starts with YakScout's title & caption check off (Settings → YakScout switches it any time) |
+| `YAK_SCOUT_MIN` | `50` | How sure YakScout must be (0-100) before it drops a Short; lower drops more, higher drops fewer |
 | `YAK_DB` | `./yaktube.db` | Where the database lives (Docker: `/data/yaktube.db`, already set) |
 | `YAK_PORT` | `8080` | Port to listen on (not for Docker, see below) |
 | `YAK_HOST` | `0.0.0.0` | Address to listen on; `127.0.0.1` keeps it to this computer only |
@@ -146,11 +148,67 @@ To preview it on a computer, add `?tv=1` to any YakTube address (`?tv=0` switche
 - **Shorts:** once an hour YakTube opens youtube.com/shorts like a visitor who isn't logged in and keeps the ~40
   Shorts YouTube offers (ones that can't play outside YouTube are skipped), up to the newest 200. It uses YouTube's
   own internal request, so YouTube could break it. Watching Shorts doesn't change your Home / New to you suggestions.
+- **YakScout:** every Short from the hourly batch is looked at before it reaches the Shorts list, and ones from content
+  farms are dropped: the faceless channels that churn out Shorts from one formula to farm views and ad money. Being made
+  with AI isn't what it looks for (people make clever, funny things with AI); the formula is. YakScout adds up clues from
+  the title, description and auto-captions: copy-pasted channel descriptions, scripts that open "In this town,
+  everyone …", melodramatic wording, minutes of non-stop fast narration, and (only a little) saying it was made with AI.
+  No one clue is enough on its own. A channel YakScout has mostly dropped is dropped
+  without looking at its other Shorts. It never judges Shorts from your subscriptions, and if YouTube won't answer, the
+  Short is let through. To see what it makes of one Short: `python3 app.py scout <link or id>`. Dropped ones are
+  listed in the log (`[scout] dropped …`). Spots by wording, not by looking at the video, so some get through.
+  **Settings → YakScout** switches it on or off and shows what it has done (see [YakScout settings](#yakscout-settings)).
+- **YakScout plugin (optional):** for more, run the YakScout plugin on the NAS with Docker, or on another computer on your
+  network (an old PC, a Mac). It listens to the first 15 seconds of each Short and recognises the synthetic voices farms
+  reuse across channels (about 2 seconds a Short). Put its address in **Settings → YakScout** (port `8095` unless you
+  changed it); YakTube connects to it, hands it Shorts one at a time and adds what it finds to its own score. The page
+  shows whether it's connected. When the plugin is off, YakTube carries on without it, and works the same without it.
 - **Tidy-up:** once a day YakTube forgets old "Up next" lists and videos nobody needs (unwatched, not from
   your subscriptions, older than 60 days; subscription videos after a year), so the database stays a few MB.
   Profiles, subscriptions and watch history are never touched.
 - **Data:** everything is in `yaktube.db`. Back it up by copying that file
   (Docker: `docker cp yaktube:/data/yaktube.db .`).
+
+## YakScout settings
+**Settings → YakScout** (under Plugins). The numbers at the top refresh by themselves while the page is open.
+
+**How a Short is judged.** Each new Short gets a score from 0 to 100. The built-in check (**Titles & captions**) adds
+points for farm clues in what the Short says about itself; the YakScout plugin (**Scan voices**) adds points if it
+hears a farm voice. Once the total reaches **Drop at** (Advanced, 50 to start) the Short leaves the Shorts list. Two
+lists overrule the score: **Never drop** always wins, then **AI-Farm channels**.
+
+**Checks**
+- **Titles & captions:** YakTube's own check, no plugin needed.
+- **Scan voices:** sends Shorts to the YakScout plugin to be listened to. Needs the plugin running (Connection).
+
+**Connection:** where the YakScout plugin is (the NAS's address, port `8095`). Once connected, the line under it shows
+the plugin's version, how long a Short takes, its last scan and how long it has been running.
+
+**Lists** (each folds away; the longer ones can be searched)
+- **Dropped:** the Shorts taken out of the list, newest first, with what caught them (*Story*, *Voice*, *Channel*,
+  *Pasted*, *Text*). **Bring back** puts one back at the front of the Shorts list, and it's never dropped again.
+- **AI-Farm channels:** every Short from these is dropped without being checked. YakScout adds a channel by itself once
+  it has judged 3 or more of its Shorts and dropped over half (*Found by YakScout*); you can add one by name (*Added by
+  you*), which drops its Shorts already in the list straight away. **×** takes a channel off; one YakScout found stays
+  off.
+- **Never drop:** channels whose Shorts are always kept, whatever they score. Adding one brings its dropped Shorts back.
+  For a channel that keeps getting caught by mistake.
+- **Voices:** the farm voices the plugin knows, and the channels each was heard on. A voice heard on 2 or more channels
+  drops a Short by itself (50 points); a voice from one channel needs one more clue (35). To teach it a voice, paste a
+  link to a farm Short and press **Learn**: if it's a voice it already knows, that channel is added to it. **×**
+  forgets a voice. Shown while the plugin is connected; the plugin keeps them (in its `data/voices.json`).
+- **Log:** the last 100 verdicts: *Read* (titles & captions only) or *Scanned* (the plugin listened too), the score and
+  the reasons. Handy for seeing why something was, or wasn't, dropped. **Download CSV** saves every verdict YakScout
+  still remembers (not just 100) for Numbers or Excel: date, verdict, check, score, title, channel, reasons, link.
+
+**Advanced**
+- **Drop at:** the score that drops a Short (30-90). Lower catches more and risks more mistakes; higher lets more through.
+- **Remember for:** how long verdicts are kept (30, 60 or 90 days). After that a Short is judged again if it turns up.
+  Ones you brought back are always remembered.
+- **Backup:** downloads `yakscout-backup-<date>.zip`, holding `backup.json` (your channel lists, the Shorts you
+  brought back, these Advanced settings and, while the plugin is connected, its learned voices) and `log.csv`.
+- **Restore:** pick a backup (the `.zip`, or the `backup.json` from inside it). It adds to what's there and removes
+  nothing. Voices go back only while the plugin is connected; everything else restores either way.
 
 ## Using it away from home
 YakTube has no login, so **never open port 8080 to the internet**. Two safe ways to reach it from your phone:

@@ -1,5 +1,5 @@
 """Phase 1 tests: run with `python3 test_app.py`. YouTube is mocked; no network needed."""
-import json, os, re, sys, tempfile, threading, time, unittest, urllib.request, urllib.parse, http.cookiejar
+import json, os, re, sys, tempfile, threading, time, unittest, urllib.error, urllib.request, urllib.parse, http.cookiejar
 os.environ["YAK_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app
@@ -137,14 +137,19 @@ class T(unittest.TestCase):
         app.OUTSIDE[:] = []
         _, url, page = self.get(a, "/")
         self.assertIn('href="/" class="on"', page)                    # Home is the start page
-        self.assertEqual(page.count('class="scard"'), 4 * page.count('class="shelf"'))   # Shorts come in groups of 4...
-        self.assertEqual(page.count('class="shelf"'), 2)               # (24 videos: after the 8th and the 20th)
-        self.assertEqual(page[:page.index('class="shelf"')].count('<a class="card'), 8)   # ...after the first 8 videos
+        grid = page[page.index('class="grid hgrid"'):page.index('class="hrows"')]   # the phone's grid
+        self.assertEqual(grid.count('class="scard"'), 4 * grid.count('class="shelf"'))   # Shorts come in groups of 4...
+        self.assertEqual(grid.count('class="shelf"'), 2)               # (24 videos: after the 8th and the 20th)
+        self.assertEqual(grid[:grid.index('class="shelf"')].count('<a class="card'), 8)   # ...after the first 8 videos
         self.assertIn('/oar2.jpg', page)
         for nav in ('class="side"', 'class="rib"', 'class="bot"'):    # sidebar (computer), ribbon + bottom bar (phone)
             self.assertIn(nav, page)
         self.assertIn('href="/feed" class=""><svg', page)
         self.assertIn('<span>Profiles</span>', page)
+        side = page[page.index('<nav class="side">'):page.index('<main>')]
+        self.assertNotIn('class="theme"', side)                       # light or dark: in Settings, not the side panel...
+        self.assertIn('class="theme"', page[:page.index('<nav class="side">')])   # ...a phone keeps its header button
+        self.assertIn('data-p="theme"', self.get(a, "/settings")[2])
         self.assertTrue(self.get(a, "/foryou")[1].endswith("/"))       # old For you link lands on Home
         self.assertIn('href="/feed" class="on"', self.get(a, "/feed")[2])
         # thumbs up / down: a click sets it, the same again clears it, the other one swaps it
@@ -272,8 +277,12 @@ class T(unittest.TestCase):
         db.execute("INSERT OR REPLACE INTO related_src VALUES('tvwatched01', ?)", (now,))
         db.execute("INSERT INTO history(profile_id,video_id,watched_at) VALUES(?, 'tvwatched01', ?)", (pid, now))
         web = self.get(a, "/")[2]
-        self.assertNotIn('class="trow"', web)                          # phones and computers: the grid, no TV script
-        self.assertNotIn("TV pages: the remote", web)
+        self.assertIn('class="grid hgrid"', web)                       # phones: the grid; computers: the TV's rows...
+        self.assertIn('<div class="hrows"><section class="trow" data-row="rec"><h2>Recommended for you</h2>', web)
+        self.assertIn('<h2>Because you watched Watched on TV</h2>', web)
+        self.assertIn('x.className="rarr "', web)                            # ...moved along with arrows
+        for tv_only in ('class="tvhead"', "window.__yak", ".tvside:focus-within", 'var rail=document.querySelector(".tvside")'):
+            self.assertNotIn(tv_only, web)                             # no TV search pill, remote, recent channels or TV styles
         a.addheaders = [("User-Agent", "Mozilla/5.0 YakTubeTV/1")]
         page = self.get(a, "/")[2]
         self.assertNotIn('tvinfo', page)                                # details sit under each picture...
@@ -975,6 +984,393 @@ class T(unittest.TestCase):
         self.assertIn('f.dataset.sure', hist)
         self.assertIn("No searches remembered.", page)
         db.close()
+
+class ScoutTests(unittest.TestCase):
+    """Scout: spotting content-farm Shorts from what they say about themselves (YouTube mocked)."""
+    STORY = ("In this world, everyone lives in tiny cabins on one giant wall underground, and nobody knows what's on the "
+             "surface. You see, the wall is miles long and miles tall, inside a cave so big you can't see the other side. ")
+
+    def setUp(self):
+        app.init_db()
+        c = app.connect()
+        c.execute("DELETE FROM scout"); c.execute("DELETE FROM videos"); c.execute("DELETE FROM outside")
+        c.execute("DELETE FROM settings WHERE k LIKE 'scout_%'"); c.execute("DELETE FROM scout_chan")
+        c.close()
+        self.keep = (dict(app.SCOUT_CFG), app.post_json, app.fetch, app.OUTSIDE[:])
+        app.SCOUT_CFG.update(text="1", on="0", addr="", port="8095", seen="0", min="", days="60")
+        app.SCOUT_LINK.update(state="", error="", voices=[], version="", up=0, secs=0.0, last=0)
+
+    def tearDown(self):
+        app.post_json, app.fetch = self.keep[1:3]
+        app.SCOUT_CFG.clear(); app.SCOUT_CFG.update(self.keep[0])
+        app.OUTSIDE[:] = self.keep[3]
+
+    def test_score(self):
+        long_story = self.STORY * 8                                       # ~330 words
+        score, why = app.scout_score("Everyone Lives In Tiny Cabins", "", long_story, 75)
+        self.assertGreaterEqual(score, app.SCOUT_MIN)                     # world-rule opening + non-stop fast narration
+        self.assertIn("world-rule opening", why)
+        self.assertEqual(app.scout_score("Fixing my sink", "", "okay so first you turn the water off. " * 8, 60)[0], 0)
+        self.assertLess(app.scout_score("Cats", "cute #aicat #cat", "", 20)[0], app.SCOUT_MIN)      # made with AI isn't a farm
+        self.assertEqual(app.scout_score("My cat as a knight", "Made with Sora #aiart", "", 20), (10, ["made with AI"]))
+        self.assertGreaterEqual(app.scout_score("Funny", "Welcome to our Cats channel. Educational & Entertainment Notice", "", 20)[0], app.SCOUT_MIN)
+        self.assertLess(app.scout_score("GPT-5 reviewed #ai #aitools", "", "", 30)[0], app.SCOUT_MIN)   # talking about AI
+        self.assertLess(app.scout_score("POV: you what if part 2 #pov #storytime", "", "", 30)[0], app.SCOUT_MIN)  # clickbait alone isn't enough
+        self.assertLess(app.scout_score("x", "", "In this world where " + "word " * 40, 30)[0], app.SCOUT_MIN)    # one signal isn't enough
+        self.assertEqual(app.scout_score("", "", "In a world where " + "hello " * 4, 5)[0], 0)             # too short to read
+        melo = "the forbidden outcast whispered about destiny. " * 6
+        self.assertIn("melodrama", " ".join(app.scout_score("", "", melo, 40)[1]))
+
+    def test_text(self):
+        xml = ('<timedtext format="3"><body><p t="0" d="1500"><s>Hello</s><s t="400"> there</s></p>'
+               '<p t="1500" d="1000" a="1">\n</p><p t="2500" d="2000">[music] and bye</p></body></timedtext>')
+        self.assertEqual(app.scout_text(xml), ("Hello there and bye", 4))
+
+    def _wire(self, details, calls):
+        cap = lambda url: '<timedtext><body><p t="0" d="60000">' + (self.STORY * 8 if "st0000" in url else "okay first turn the water off. " * 8) + '</p></body></timedtext>'
+        def post(url, body, timeout=10):
+            vid = body["videoId"]; calls.append(vid)
+            if vid == "err00000000": raise IOError("offline")
+            if vid not in details: return {}
+            d = details[vid]
+            return {"videoDetails": {"title": d[0], "shortDescription": d[1], "lengthSeconds": "75"},
+                    "captions": {"playerCaptionsTracklistRenderer": {"captionTracks": [
+                        {"languageCode": "en", "kind": "asr", "baseUrl": "https://www.youtube.com/api/timedtext?v=" + vid}]}}}
+        app.post_json = post
+        app.fetch = lambda url, timeout=10: cap(url) if "timedtext" in url else fake_fetch(url, timeout)
+
+    def test_outside_drops_ai(self):
+        details = {"ok000000000": ("Fixing a sink", ""), "ai000000000": ("Cats", "so cute #aicat"),
+                   "st000000000": ("Cabins", "")}
+        calls = []
+        self._wire(details, calls)
+        app.SCOUT_CFG["text"] = "1"
+        c = app.connect()
+        c.executemany("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)", [
+            ("ok000000000", "Fixing a sink", "Handy"), ("ai000000000", "Cats", "Meow"), ("st000000000", "Cabins", "Tales"),
+            ("err00000000", "?", "Net"), ("nodata000000", "?", "Gone")])
+        app.OUTSIDE[:] = ["ok000000000", "ai000000000", "st000000000", "err00000000", "nodata000000"]
+        app.scout_outside(c)
+        # the farm story is gone; the AI-tagged cat isn't a farm's, so it stays; so do the one that can't be judged
+        # (offline) and the one YouTube knows nothing of
+        self.assertEqual(app.OUTSIDE, ["ok000000000", "ai000000000", "err00000000", "nodata000000"])
+        got = {r[0]: r[1] for r in c.execute("SELECT video_id, farm FROM scout")}
+        self.assertEqual(got, {"ok000000000": 0, "ai000000000": 0, "st000000000": 1, "nodata000000": 0})   # err: not remembered
+        # next batch: only what hasn't been judged is asked about again
+        calls.clear()
+        app.OUTSIDE[:] = ["ok000000000", "ai000000000", "st000000000", "err00000000"]
+        app.scout_outside(c)
+        self.assertEqual(calls, ["err00000000"])
+        self.assertEqual(app.OUTSIDE, ["ok000000000", "ai000000000", "err00000000"])
+        c.close()
+
+    def test_scan_during_text_check(self):
+        """The Scout plugin answers while the text check is still running: the two add up, neither is lost."""
+        keep = app.scout_check
+        app.SCOUT_CFG["text"] = "1"
+        c = app.connect()
+        c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('race0000000','Tale','Voxly',1)")
+
+        def text_check(vid):
+            c2 = app.connect()
+            app.scout_verdict(c2, vid, 35, ["same voice as x"])      # Scout gets there first
+            c2.commit(); c2.close()
+            return {"score": 20, "farm": 0, "why": ["non-stop fast narration"]}
+        try:
+            app.scout_check = text_check
+            app.OUTSIDE[:] = ["race0000000"]
+            app.scout_outside(c)
+        finally:
+            app.scout_check = keep
+        row = c.execute("SELECT score, farm, deep, why FROM scout WHERE video_id='race0000000'").fetchone()
+        self.assertEqual(tuple(row), (55, 1, 1, "non-stop fast narration; same voice as x"))
+        self.assertEqual(app.OUTSIDE, [])
+        self.assertEqual(app.scout_queue(c), [])                       # not handed to Scout a second time
+        c.close()
+
+    def _fake_scout(self, looks):
+        """A Scout plugin on this machine: answers /status, and /look from `looks` (id -> (code, body))."""
+        seen = []
+        class H(app.BaseHTTPRequestHandler):
+            def answer(self, code, obj):
+                b = json.dumps(obj).encode()
+                self.send_response(code); self.send_header("Content-Type", "application/json"); self.end_headers()
+                self.wfile.write(b)
+            def do_GET(self):
+                if self.path == "/voices":
+                    return self.answer(200, {"voices": [{"name": "v1", "channels": ["A", "B"], "print": [0.0] * 512}]})
+                self.answer(200, {"scout": "0.2", "busy": False, "voices": [{"name": "tbQTA6u4lEM", "channels": 4, "learned": "Nov 13"}]})
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                if self.path == "/learn":
+                    seen.append("learn " + body["id"])
+                    return self.answer(200, {"name": "tbQTA6u4lEM", "channels": ["Drip Dyl", "Volze"], "new": False})
+                if self.path == "/voices":
+                    seen.append(f"restore {len(body['voices'])}")
+                    return self.answer(200, {"added": len(body["voices"]), "voices": 2})
+                if self.path == "/forget":
+                    seen.append("forget " + body["name"])
+                    return self.answer(200, {"forgot": True})
+                vid = body["id"]
+                seen.append(vid)
+                self.answer(*looks.get(vid, (200, {"score": 0, "why": []})))
+            def log_message(self, *a): pass
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), H)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        return srv.server_port, seen
+
+    def test_scout_computer(self):
+        """YakTube connects to the Scout plugin, hands it Shorts one at a time and adds up what it says."""
+        c = app.connect()
+        c.executemany("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)",
+                      [("qa000000000", "Cabins", "Tales"), ("qb000000000", "Sink", "Handy"), ("qc000000000", "Gone", "X")])
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at) VALUES('qa000000000',30,0,'world-rule opening',0)")
+        app.OUTSIDE[:] = ["qa000000000", "qb000000000", "qc000000000"]
+        c.executemany("INSERT INTO outside VALUES(?,?)", enumerate(app.OUTSIDE))
+        port, seen = self._fake_scout({"qa000000000": (200, {"score": 35, "why": ["same voice as x"]}),
+                                       "qb000000000": (200, {"score": 15, "why": ["word-by-word captions"]}),
+                                       "qc000000000": (502, {"error": "Video unavailable"})})
+        self.assertEqual(app.scout_link_once(), 30)                                     # off until it's set up
+        self.assertEqual(app.SCOUT_LINK["state"], "off")
+        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
+        for _ in range(5):
+            app.scout_link_once()
+        self.assertEqual(app.SCOUT_LINK["state"], "ok")
+        self.assertEqual(app.SCOUT_LINK["voices"][0]["name"], "tbQTA6u4lEM")
+        self.assertEqual(seen, ["qa000000000", "qb000000000", "qc000000000", "qc000000000"])   # one at a time; 2 tries
+        self.assertEqual(app.OUTSIDE, ["qb000000000", "qc000000000"])                   # 30 + 35: the farm is gone
+        self.assertNotIn("qa000000000", [r[0] for r in c.execute("SELECT video_id FROM outside")])
+        self.assertEqual(c.execute("SELECT score, farm, why, deep FROM scout WHERE video_id='qa000000000'").fetchone()[:],
+                         (65, 1, "world-rule opening; same voice as x", 1))
+        self.assertEqual(c.execute("SELECT why FROM scout WHERE video_id='qc000000000'").fetchone()[0], "couldn't scan")
+        self.assertEqual(app.scout_queue(c), [])                                         # all watched
+        self.assertGreater(int(app.SCOUT_CFG["seen"]), 0)
+        app.SCOUT_CFG["port"] = "1"                                                      # nothing there
+        self.assertEqual(app.scout_link_once(), 60)
+        self.assertEqual(app.SCOUT_LINK["state"], "down")
+        c.close()
+
+    def test_settings_and_bring_back(self):
+        c = app.connect()
+        pid = c.execute("INSERT INTO profiles(name,color) VALUES('Scouter','#123456')").lastrowid
+        c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('qd000000000','Farm story','Tales',1)")
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,deep) VALUES('qd000000000',65,1,'world-rule opening',1,1)")
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.App)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_port}"
+        def post(path, **form):
+            req = urllib.request.Request(base + path, urllib.parse.urlencode(form).encode(), {"Cookie": f"yak_profile={pid}"})
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as ex:
+                return ex.code, ex.read().decode()
+        page = urllib.request.urlopen(urllib.request.Request(base + "/settings", headers={"Cookie": f"yak_profile={pid}"})).read().decode()
+        self.assertIn('data-p="scout"', page)                                            # Plugins > Scout
+        self.assertIn("Not set up", page)
+        self.assertIn('data-keep="qd000000000"', page)                                   # in Dropped, with Bring back
+        code, body = post("/settings/scout", k="addr", v="http://192.168.1.31:9000/", port="")
+        self.assertEqual((code, json.loads(body)), (200, {"addr": "192.168.1.31", "port": "9000", "on": "1"}))
+        self.assertEqual(dict(c.execute("SELECT k, v FROM settings WHERE k IN ('scout_addr','scout_port','scout_on')").fetchall()),
+                         {"scout_addr": "192.168.1.31", "scout_port": "9000", "scout_on": "1"})   # kept over a restart
+        self.assertEqual(post("/settings/scout", k="addr", v="scout.local", port="8095")[0], 200)
+        self.assertEqual(app.SCOUT_CFG["addr"], "scout.local")
+        self.assertEqual(post("/settings/scout", k="addr", v="not an address", port="8095")[0], 400)
+        self.assertEqual(post("/settings/scout", k="addr", v="scout.local", port="70000")[0], 400)
+        self.assertEqual(app.SCOUT_CFG["addr"], "scout.local")                           # bad ones don't change it
+        self.assertEqual(post("/settings/scout", k="text", v="0")[0], 200)
+        self.assertEqual(app.SCOUT_CFG["text"], "0")
+        self.assertEqual(post("/settings/scout", k="nope", v="1")[0], 400)
+        # Bring back: back at the front of Shorts, and never dropped again
+        app.OUTSIDE[:] = ["zz000000000"]
+        self.assertEqual(post("/scout/keep", v="qd000000000")[0], 204)
+        self.assertEqual(app.OUTSIDE, ["qd000000000", "zz000000000"])
+        self.assertEqual(app.scout_verdict(c, "qd000000000", 35, ["same voice as x"]), False)
+        self.assertEqual(app.OUTSIDE, ["qd000000000", "zz000000000"])
+        self.assertEqual(post("/scout/keep", v="unknown0000")[0], 400)
+        c.close()
+
+    def _app(self, pid):
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.App)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_port}"
+
+        def call(path, **form):
+            req = urllib.request.Request(base + path, urllib.parse.urlencode(form).encode() if form else None,
+                                         {"Cookie": f"yak_profile={pid}"})
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, r.read().decode()
+            except urllib.error.HTTPError as ex:
+                return ex.code, ex.read().decode()
+        return call
+
+    def test_channel_lists(self):
+        """Farm channels and Never drop: added by hand, and what that does to the Shorts list straight away."""
+        c = app.connect()
+        c.executemany("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)", [
+            ("f1000000000", "t", "Ch Farm"), ("k1000000000", "t", "Good Guy"), ("x1000000000", "t", "Other"),
+            ("k2000000000", "t", "Good Guy")] + [(f"au00000000{i}", "t", "Auto") for i in range(3)])
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at) VALUES('k1000000000',60,1,'world-rule opening',0)")
+        c.executemany("INSERT INTO scout(video_id,score,farm,why,at) VALUES(?,90,1,'x',0)", [(f"au00000000{i}",) for i in range(3)])
+        app.OUTSIDE[:] = ["f1000000000", "x1000000000"]
+        self.assertTrue(app.scout_set_channel(c, "farm", "  ch   FARM "))           # any case, extra spaces
+        self.assertEqual(app.OUTSIDE, ["x1000000000"])                           # its Shorts leave the list now
+        self.assertEqual(c.execute("SELECT farm FROM scout WHERE video_id='f1000000000'").fetchone()[0], 1)
+        self.assertEqual(app.scout_channels(c), {"ch farm", "auto"})
+        self.assertTrue(app.scout_set_channel(c, "keep", "good guy"))            # Never drop: its dropped Short comes back
+        self.assertEqual(app.OUTSIDE, ["k1000000000", "x1000000000"])
+        self.assertFalse(app.scout_verdict(c, "k2000000000", 95, ["farm voice (4 channels)"]))   # and none get dropped
+        self.assertTrue(app.scout_set_channel(c, "farm", "Auto", add=False))     # taking off one Scout found
+        self.assertEqual(app.scout_channels(c), {"ch farm"})
+        self.assertEqual(list(app.scout_lists(c)["ok"]), ["auto"])
+        self.assertTrue(app.scout_set_channel(c, "farm", "ch farm", add=False))
+        self.assertEqual(app.scout_channels(c), set())
+        self.assertFalse(app.scout_set_channel(c, "farm", "   "))
+        self.assertFalse(app.scout_set_channel(c, "nope", "x"))
+        c.close()
+
+    def test_drop_score_and_memory(self):
+        c = app.connect()
+        app.SCOUT_CFG["min"] = "70"
+        self.assertFalse(app.scout_verdict(c, "m1000000000", 60, ["x"]))          # under the drop score you chose
+        app.SCOUT_CFG["min"] = ""
+        self.assertTrue(app.scout_verdict(c, "m2000000000", 60, ["x"]))           # the default, 50
+        now = int(time.time())
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('old00000000',0,0,'',?,0)", (now - 40 * 86400,))
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('kept0000000',0,0,'',?,1)", (now - 400 * 86400,))
+        app.tidy(c, now)
+        self.assertIsNotNone(c.execute("SELECT 1 FROM scout WHERE video_id='old00000000'").fetchone())   # 60 days
+        app.SCOUT_CFG["days"] = "30"
+        app.tidy(c, now)
+        self.assertIsNone(c.execute("SELECT 1 FROM scout WHERE video_id='old00000000'").fetchone())
+        self.assertIsNotNone(c.execute("SELECT 1 FROM scout WHERE video_id='kept0000000'").fetchone())   # brought back: kept
+        c.close()
+
+    def test_page_routes(self):
+        """The Settings > Scout page and what it posts to."""
+        c = app.connect()
+        pid = c.execute("INSERT INTO profiles(name,color) VALUES('Scouter2','#123456')").lastrowid
+        c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('qd000000000','Farm story','Tales',1)")
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,deep) VALUES('qd000000000',65,1,'world-rule opening',?,1)",
+                  (int(time.time()),))
+        call = self._app(pid)
+        page = call("/settings")[1]
+        for bit in ('id="sf-drop"', 'id="sf-farm"', 'id="sf-keep"', 'id="sf-voice"', 'id="sf-log"', 'id="sf-adv"',
+                    "Scanned today", 'data-set="min"', 'data-filter="drop"', "Shows when YakScout is connected."):
+            self.assertIn(bit, page)
+        self.assertIn('<b id="sc-dropped">1</b><span>Dropped today</span>', page)
+        self.assertEqual(call("/settings/scout", k="min", v="65")[0], 204)
+        self.assertEqual(app.SCOUT_CFG["min"], "65")
+        self.assertEqual(call("/settings/scout", k="min", v="99")[0], 400)
+        self.assertEqual(call("/settings/scout", k="days", v="90")[0], 204)
+        self.assertEqual(call("/settings/scout", k="days", v="45")[0], 400)
+        self.assertEqual(call("/scout/channel", op="add", kind="farm", v="Bad Farm")[0], 200)
+        self.assertEqual(call("/scout/channel", op="add", kind="keep", v="")[0], 400)
+        self.assertIn("Bad Farm", call("/settings")[1])
+        self.assertEqual(call("/scout/channel", op="remove", kind="farm", v="Bad Farm")[0], 200)
+        self.assertEqual(call("/scout/voice", op="learn", v="https://youtube.com/shorts/AeyLzuVhr1s")[0], 503)  # not connected
+        port, seen = self._fake_scout({})
+        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
+        app.SCOUT_LINK.update(state="ok", voices=[{"name": "tbQTA6u4lEM", "channels": 2, "channel_names": ["Drip Dyl", "Volze"],
+                                                    "learned": "Nov 13"}], version="0.4", up=7200, secs=2.4, last=int(time.time()))
+        code, body = call("/scout/voice", op="learn", v="https://youtube.com/shorts/AeyLzuVhr1s?si=x")
+        self.assertEqual((code, json.loads(body)), (200, {"ok": True, "msg": "Same voice as tbQTA6u4lEM · 2 channels"}))
+        self.assertEqual(call("/scout/voice", op="learn", v="hello")[0], 400)
+        self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 200)
+        self.assertEqual(seen, ["learn AeyLzuVhr1s", "forget tbQTA6u4lEM"])
+        page = call("/settings")[1]
+        self.assertIn("2 channels: Drip Dyl, Volze", page)
+        self.assertIn("<b>2.4 s</b> a Short", page)
+        self.assertIn("Up <b>2 hours</b>", page)
+        self.assertIn("Plugin <b>v0.4</b>", page)
+        self.assertIn("AI-Farm channels", page)
+        live = json.loads(call("/scout/stats")[1])                                    # what the page refreshes from
+        self.assertEqual((live["state"], live["text"], live["dropped"]), ("ok", "Connected", 1))
+        self.assertIn("Plugin <b>v0.4</b>", live["facts"])
+        c.close()
+
+    def test_backup_restore_and_log(self):
+        """Advanced > Backup (a zip: backup.json + log.csv), Restore (the zip or its json), and Log > Download CSV."""
+        import zipfile, io as _io
+        c = app.connect()
+        pid = c.execute("INSERT INTO profiles(name,color) VALUES('Scouter3','#123456')").lastrowid
+        c.executemany("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)",
+                      [("qd000000000", "Farm, story 😳", "Tales"), ("kb000000000", "Kept one", "Nice")])
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,deep) VALUES('qd000000000',65,1,'world-rule opening',?,1)",
+                  (int(time.time()),))
+        c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('kb000000000',50,0,'x',?,1)", (int(time.time()),))
+        app.scout_set_channel(c, "farm", "Bad Farm"); app.scout_set_channel(c, "keep", "Good Guy")
+        app.SCOUT_CFG["min"] = "65"
+        port, seen = self._fake_scout({})
+        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port)); app.SCOUT_LINK.update(state="ok")
+        srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.App)
+        threading.Thread(target=srv.serve_forever, daemon=True).start()
+        self.addCleanup(srv.shutdown)
+        base = f"http://127.0.0.1:{srv.server_port}"
+
+        def req(path, data=None):
+            r = urllib.request.Request(base + path, data, {"Cookie": f"yak_profile={pid}"})
+            try:
+                with urllib.request.urlopen(r) as x:
+                    return x.status, x.headers, x.read()
+            except urllib.error.HTTPError as ex:
+                return ex.code, ex.headers, ex.read()
+        code, hd, body = req("/scout/log.csv")                                     # the log, for a spreadsheet
+        self.assertIn("yakscout-log-", hd["Content-Disposition"])
+        rows = body.decode("utf-8-sig").splitlines()
+        self.assertEqual(rows[0], "Date,Verdict,Check,Score,Title,Channel,Reasons,Link")
+        self.assertIn('Dropped,Scanned,65,"Farm, story 😳",Tales,world-rule opening,https://www.youtube.com/shorts/qd000000000',
+                      rows[1] + rows[2])
+        self.assertIn("Brought back,Read,50,Kept one", body.decode("utf-8-sig"))
+        code, hd, zipped = req("/scout/backup")                                    # the backup
+        self.assertEqual((code, hd["Content-Type"]), (200, "application/zip"))
+        z = zipfile.ZipFile(_io.BytesIO(zipped))
+        self.assertEqual(sorted(z.namelist()), ["backup.json", "log.csv"])
+        b = json.loads(z.read("backup.json"))
+        self.assertEqual(b["settings"]["min"], "65")
+        self.assertEqual(sorted((x["kind"], x["name"]) for x in b["channels"]), [("farm", "Bad Farm"), ("keep", "Good Guy")])
+        self.assertEqual([x["id"] for x in b["brought_back"]], ["kb000000000"])
+        self.assertEqual(len(b["voices"][0]["print"]), 512)                       # voiceprints from the plugin
+        # start again from nothing, then restore the zip
+        c.execute("DELETE FROM scout_chan"); c.execute("DELETE FROM scout"); app.SCOUT_CFG["min"] = ""
+        code, _, out = req("/scout/restore", zipped)
+        self.assertEqual((code, json.loads(out)["msg"]), (200, "Restored 2 channels, 1 brought back, 1 voices"))
+        self.assertEqual(app.scout_channels(c), {"bad farm"})
+        self.assertEqual(app.SCOUT_CFG["min"], "65")
+        self.assertEqual(c.execute("SELECT kept FROM scout WHERE video_id='kb000000000'").fetchone()[0], 1)
+        self.assertEqual(seen, ["restore 1"])
+        self.assertEqual(req("/scout/restore", z.read("backup.json"))[0], 200)     # the plain json works too
+        app.SCOUT_LINK.update(state="down")                                        # plugin away: the rest still restores
+        self.assertIn("voices not restored", json.loads(req("/scout/restore", zipped)[2])["msg"])
+        self.assertEqual(req("/scout/restore", b'{"hello": 1}')[0], 400)
+        self.assertEqual(req("/scout/restore", b"PK not a zip")[0], 400)
+        self.assertEqual(req("/scout/restore", b"nonsense")[0], 400)
+        c.close()
+
+    def test_channel_memory_and_off_switch(self):
+        c = app.connect()
+        for i in range(3):                                                # a channel with 3 Shorts, all judged a farm's
+            c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)", (f"bad0000000{i}", "t", "Farm"))
+            c.execute("INSERT INTO scout(video_id,score,farm,why,at) VALUES(?,90,1,'x',0)", (f"bad0000000{i}",))
+        c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('bad00000009','t','Farm',1)")
+        self.assertEqual(app.scout_channels(c), {"farm"})
+        calls = []
+        self._wire({}, calls)
+        app.SCOUT_CFG["text"] = "1"
+        app.OUTSIDE[:] = ["bad00000009"]
+        app.scout_outside(c)
+        self.assertEqual((app.OUTSIDE, calls), ([], []))                  # dropped without asking YouTube
+        app.SCOUT_CFG["text"] = "0"
+        app.OUTSIDE[:] = ["bad00000000", "zzz00000000"]
+        app.scout_outside(c)
+        self.assertEqual((app.OUTSIDE, calls), (["zzz00000000"], []))    # off: nothing new is read; what was already
+        self.assertIsNone(c.execute("SELECT 1 FROM scout WHERE video_id='zzz00000000'").fetchone())   # decided stands
+        c.close()
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
