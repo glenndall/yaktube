@@ -3825,7 +3825,12 @@ class App(BaseHTTPRequestHandler):
         q = {"template": "submit-voice.yml", "title": "Voice: " + ", ".join(entry.get("channels", [])[:3]),
              "examples": "\n".join("https://youtube.com/shorts/" + x for x in entry.get("examples", [])[:10]),
              "channels": "\n".join(entry.get("channels", [])[:20])}
-        self.redirect(f"https://github.com/{SCOUT_LIST_REPO}/issues/new?" + urllib.parse.urlencode(q))
+        url = f"https://github.com/{SCOUT_LIST_REPO}/issues/new?"
+        if entry:                                         # the voice file's contents too, so nothing is dragged in
+            full = url + urllib.parse.urlencode({**q, "voice": json.dumps(entry, separators=(",", ":"))})
+            if len(full) < 7500:                          # GitHub refuses much longer links: then the file is dragged in
+                return self.redirect(full)
+        self.redirect(url + urllib.parse.urlencode(q))
 
     def scout_share(self):
         """Settings > YakScout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""
