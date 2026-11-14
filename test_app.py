@@ -1289,6 +1289,10 @@ class ScoutTests(unittest.TestCase):
         app.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
         app.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
         page = call("/settings")[1]
+        self.assertNotIn("/scout/share?name=", page)                                       # Share voices is off at first
+        self.assertNotIn('id="sf-subs"', page)                                             # and so is Review submissions
+        self.assertEqual(call("/settings/scout", k="share", v="1")[0] // 100, 2)
+        page = call("/settings")[1]
         self.assertIn("2 channels: Drip Dyl, Volze", page)
         self.assertIn('<span class="tag">Learned</span>', page)
         self.assertIn('<span class="tag">Shared</span>', page)
@@ -1401,6 +1405,8 @@ class ScoutTests(unittest.TestCase):
         def broken(en):
             raise OSError("plugin off")
         self.assertEqual(app.scout_judge_entry(e1, broken, text)["verdict"], "wait")
+        self.assertNotIn('id="sf-subs"', app.scout_pane(app.connect()))                    # off: not for everyone
+        app.SCOUT_CFG["review"] = "1"
         page = app.scout_pane(app.connect())
         self.assertIn('id="sf-subs"', page)
         self.assertIn("✅ Looks good to merge", page)

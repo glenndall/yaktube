@@ -409,7 +409,8 @@ SCOUT = os.environ.get("YAK_SCOUT", "1") != "0"                 # the title/capt
 SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > YakScout, saved as scout_<k> in settings:
              "on": "0", "addr": "", "port": "8095",             #   the YakScout plugin: on/off, where it is
              "seen": "0",                                       #   and when it last answered
-             "min": "", "days": "60"}                           # Advanced: drop at (blank: SCOUT_MIN), remember for
+             "min": "", "days": "60",                           # Advanced: drop at (blank: SCOUT_MIN), remember for,
+             "share": "0", "review": "0"}                       #   Share on voices, Submissions (the list's maintainer)
 SCOUT_MIN = int(os.environ.get("YAK_SCOUT_MIN", "50"))          # score (0-100) at which a Short counts as a farm's
 SCOUT_PER_RUN = 80                                              # Shorts judged per batch (the rest wait for the next)
 
@@ -949,7 +950,7 @@ def scout_pane(c):
         n = e(str(v.get("name", "")))
         q = urllib.parse.quote(str(v.get("name", "")))
         share = ""
-        if v.get("source") != "shared":                   # the shared list wants 2+ channels: a lone one waits here
+        if v.get("source") != "shared" and SCOUT_CFG["share"] == "1":                   # the shared list wants 2+ channels: a lone one waits here
             # 2+ channels and 2+ Shorts (an older YakScout that doesn't count Shorts is judged on channels alone)
             if isinstance(v.get("channels"), int) and v["channels"] >= 2 and v.get("examples", 2) >= 2:
                 share = (f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
@@ -965,8 +966,9 @@ def scout_pane(c):
     vinfo = "".join(f'<div class="empty">Shared list: {l.get("count", 0)} voices · '
                     f'{"updated " + ago(l["fetched"]) if l.get("fetched") else "not downloaded yet"}'
                     f'{" · " + e(str(l["error"])[:60]) if l.get("error") else ""}</div>' for l in lists)
-    # submissions to the shared voice list, checked at home
-    scout_sync_open()
+    # submissions to the shared voice list, checked at home (only for the list's maintainer: Advanced > Review)
+    if SCOUT_CFG["review"] == "1":
+        scout_sync_open()
 
     def sline(f):
         if f.get("error"):
@@ -1015,10 +1017,10 @@ def scout_pane(c):
             fold("voice", "Voices", len(voices), vlist or ('<div class="empty">None learned yet.</div>' if st == "ok" else
                  '<div class="empty">Shows when YakScout is connected.</div>'),
                  (add("voice", "Link to a farm Short", "Learn") + vinfo) if st == "ok" else "") +
-            fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
-                 subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["sync_ok"] else ""),
-                 '<div class="tools"><button type="button" class="btn small" data-review>Check</button>'
-                 '<span class="msg" role="status"></span></div>' + sinfo) +
+            (fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
+                  subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["sync_ok"] else ""),
+                  '<div class="tools"><button type="button" class="btn small" data-review>Check</button>'
+                  '<span class="msg" role="status"></span></div>' + sinfo) if SCOUT_CFG["review"] == "1" else "") +
             fold("log", "Log", len(log), logs or none,
                  '<div class="tools"><input type="search" placeholder="Search" data-filter="log" aria-label="Search">'
                  '<a class="btn ghost small" href="/scout/log.csv" download>Download CSV</a></div>') +
@@ -1028,7 +1030,9 @@ def scout_pane(c):
             '<div class="chk"><div>Remember for<small>Then YakScout looks again</small></div><select class="btn ghost small" '
             'data-set="days" aria-label="Remember for">' + "".join(
                 f'<option value="{d}"{" selected" if d == days else ""}>{d} days</option>' for d in ("30", "60", "90")) +
-            '</select></div><div class="chk"><div>Backup<small>Lists, voices, settings &amp; log (.zip)</small></div>'
+            '</select></div>' + switch("share", "Share voices", "Send to the shared list") +
+            switch("review", "Review submissions", "For the list's maintainer") +
+            '<div class="chk"><div>Backup<small>Lists, voices, settings &amp; log (.zip)</small></div>'
             '<a class="btn ghost small" href="/scout/backup" download>Download</a></div>'
             '<div class="chk"><div>Restore<small>From a backup; adds to what\'s here</small><span class="msg" id="sc-rmsg" '
             'role="status"></span></div><label class="btn ghost small" tabindex="0">Choose file<input type="file" '
@@ -2658,7 +2662,8 @@ p.addEventListener("change",function(ev){var k=ev.target.dataset.set;if(k)post("
 p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]");if(a){window.open(a.dataset.submit,"_blank","noopener")}
   var b=ev.target.closest("button");if(!b)return;
   if(b.dataset.k){var on=!b.classList.contains("on");b.classList.toggle("on",on);b.setAttribute("aria-checked",on);
-    b.firstChild.nodeValue=on?"On":"Off";post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again()}
+    b.firstChild.nodeValue=on?"On":"Off";var sv=post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again();
+    if(b.dataset.k=="share"||b.dataset.k=="review")sv.then(now)}
   else if(b.dataset.keep){post("/scout/keep","v="+b.dataset.keep);var s=document.createElement("span");s.className="sdone";
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
@@ -3723,6 +3728,9 @@ class App(BaseHTTPRequestHandler):
         """Settings > YakScout: the two switches, and where the YakScout plugin is (an address, or address:port)."""
         f = self.form()
         k, v = f.get("k", ""), f.get("v", "").strip()
+        if k in ("share", "review") and v in ("0", "1"):              # only what Settings shows: no need to reconnect
+            scout_save(self.db, k, v)
+            return self.send("", 204)
         if k in ("text", "on") and v in ("0", "1"):
             scout_save(self.db, k, v)
         elif k == "min" and v.isdigit() and 30 <= int(v) <= 90:
