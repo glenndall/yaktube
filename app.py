@@ -741,7 +741,7 @@ def scout_link_loop():
 # the YakScout plugin listens to its example Shorts (same voice?), and the titles & captions check reads them (farm
 # clues?). GitHub's servers can't do the listening (YouTube blocks them), so it happens here. Merging stays on GitHub.
 SCOUT_LIST_REPO = os.environ.get("YAK_SCOUT_LIST_REPO", "glenndall/yakscout-voices")
-SCOUT_REVIEW = {"at": 0, "error": "", "items": []}
+SCOUT_REVIEW = {"at": 0, "error": "", "items": [], "synced": 0, "sync_ok": False}
 SCOUT_FARM_CLUE = 30                                            # a titles & captions score this high is a farm clue
 
 
@@ -767,9 +767,36 @@ def scout_submissions(get=gh_get, repo=None):
                 files.append({"name": name, "entry": get(f["raw_url"])})
             except Exception as ex:
                 files.append({"name": name, "error": str(ex)[:80]})
-        out.append({"number": int(pr["number"]), "title": str(pr.get("title", ""))[:120], "url": str(pr.get("html_url", "")),
-                    "user": str(pr.get("user", {}).get("login", ""))[:40], "files": files})
+        out.append(dict(scout_pr_info(pr), files=files))
     return out
+
+
+def scout_pr_info(pr):
+    return {"number": int(pr["number"]), "title": str(pr.get("title", ""))[:120], "url": str(pr.get("html_url", "")),
+            "user": str(pr.get("user", {}).get("login", ""))[:40], "sha": str(pr.get("head", {}).get("sha", ""))[:40]}
+
+
+def scout_sync_open(get=None, now=None):
+    """When Settings > YakScout opens (at most once a minute): ask GitHub which submissions are still open, so merged
+    or closed ones leave the list, and new or changed ones show "Not checked yet". Quick: no listening."""
+    now = now or int(time.time())
+    if now - SCOUT_REVIEW["synced"] < 60:
+        return
+    SCOUT_REVIEW["synced"] = now
+    try:
+        pulls = (get or (lambda u: gh_get(u, timeout=4)))(
+            f"https://api.github.com/repos/{SCOUT_LIST_REPO}/pulls?state=open&per_page=10")[:10]
+    except Exception:
+        SCOUT_REVIEW["sync_ok"] = False                         # offline or rate-limited: keep what we had
+        return
+    SCOUT_REVIEW["sync_ok"] = True
+    had = {it["number"]: it for it in SCOUT_REVIEW["items"]}
+    items = []
+    for pr in pulls:
+        info = scout_pr_info(pr)
+        old = had.get(info["number"])
+        items.append(old if old and old.get("sha") == info["sha"] else dict(info, files=[], verdict="unchecked"))
+    SCOUT_REVIEW["items"] = items
 
 
 def scout_judge_entry(entry, verify=None, text=None):
@@ -820,13 +847,13 @@ def scout_review(get=gh_get, verify=None, text=None):
             order = ["no", "wait", "look", "ok"]
             items.append(dict(sub, files=judged,
                               verdict=min((j["verdict"] for j in judged), key=order.index) if judged else "none"))
-        SCOUT_REVIEW.update(at=int(time.time()), error="", items=items)
+        SCOUT_REVIEW.update(at=int(time.time()), error="", items=items, synced=int(time.time()), sync_ok=True)
     except Exception as ex:
         SCOUT_REVIEW.update(at=int(time.time()), error=str(ex)[:120])
     return SCOUT_REVIEW
 
 
-SCOUT_VERDICT = {"ok": "✅ Looks good to merge", "look": "⚠️ Same voice, few farm clues: check the channels",
+SCOUT_VERDICT = {"unchecked": "Not checked yet: press Check", "ok": "✅ Looks good to merge", "look": "⚠️ Same voice, few farm clues: check the channels",
                  "no": "❌ Don't merge: a different voice in its examples", "wait": "⏸ Couldn't check the voice yet",
                  "none": "No voice files in it"}
 
@@ -929,6 +956,8 @@ def scout_pane(c):
                     f'{"updated " + ago(l["fetched"]) if l.get("fetched") else "not downloaded yet"}'
                     f'{" · " + e(str(l["error"])[:60]) if l.get("error") else ""}</div>' for l in lists)
     # submissions to the shared voice list, checked at home
+    scout_sync_open()
+
     def sline(f):
         if f.get("error"):
             return f'{e(f["id"])}: {e(f["error"])}'
@@ -942,8 +971,10 @@ def scout_pane(c):
         + "".join(f'<small>{sline(f)}</small>' for f in it["files"]) +
         f'</div><a class="btn ghost small" href="{e(it["url"])}" target="_blank" rel="noopener">Open</a></div>'
         for it in SCOUT_REVIEW["items"])
-    sinfo = ('<div class="empty">' + (f'Checked {ago(SCOUT_REVIEW["at"])}' if SCOUT_REVIEW["at"] else "Not checked yet") +
-             (f' · {e(SCOUT_REVIEW["error"])}' if SCOUT_REVIEW["error"] else "") + '</div>')
+    stext = (f'Checked {ago(SCOUT_REVIEW["at"])}' if SCOUT_REVIEW["at"] and SCOUT_REVIEW["items"] else
+             "" if SCOUT_REVIEW["sync_ok"] and not SCOUT_REVIEW["items"] else "Not checked yet") + \
+        (f' · {e(SCOUT_REVIEW["error"])}' if SCOUT_REVIEW["error"] else "")
+    sinfo = f'<div class="empty">{stext}</div>' if stext else ""
     # the log: what was judged lately
     log = c.execute("SELECT s.video_id, s.score, s.farm, s.why, s.at, s.deep, v.title, v.channel_title FROM scout s "
                     "LEFT JOIN videos v ON v.id=s.video_id ORDER BY s.at DESC LIMIT 100").fetchall()
@@ -975,7 +1006,7 @@ def scout_pane(c):
                  '<div class="empty">Shows when YakScout is connected.</div>'),
                  (add("voice", "Link to a farm Short", "Learn") + vinfo) if st == "ok" else "") +
             fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
-                 subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["at"] and not SCOUT_REVIEW["error"] else ""),
+                 subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["sync_ok"] else ""),
                  '<div class="tools"><button type="button" class="btn small" data-review>Check</button>'
                  '<span class="msg" role="status"></span></div>' + sinfo) +
             fold("log", "Log", len(log), logs or none,

@@ -46,6 +46,7 @@ def fake_fetch(url, timeout=10):
     if "woz" in url or "watch?v=" in url: return f'<link rel="canonical" href="https://www.youtube.com/channel/{CID}">'
     raise IOError("no network in tests")
 app.fetch = fake_fetch
+app.gh_get = lambda *a, **k: (_ for _ in ()).throw(IOError("no network in tests"))   # GitHub too
 
 class T(unittest.TestCase):
     @classmethod
@@ -1399,7 +1400,30 @@ class ScoutTests(unittest.TestCase):
         def down(u):
             raise OSError("rate limited")
         self.assertIn("rate limited", app.scout_review(down)["error"])
-        app.SCOUT_REVIEW.update(at=0, error="", items=[])
+        # opening the page later: GitHub says which are still open. #7 was merged (gone), #8 changed (not checked
+        # yet), #9 is new (not checked yet)
+        app.scout_review(lambda u: pages[u], verify, text)
+        app.SCOUT_REVIEW["synced"] = 0
+        open_now = [{"number": 8, "title": "Add farm-0004", "html_url": "https://gh/8", "head": {"sha": "new"}},
+                    {"number": 9, "title": "Add farm-0005", "html_url": "https://gh/9", "head": {"sha": "s9"}}]
+        app.scout_sync_open(lambda u: open_now)
+        self.assertEqual([(i["number"], i["verdict"]) for i in app.SCOUT_REVIEW["items"]], [(8, "unchecked"), (9, "unchecked")])
+        app.SCOUT_REVIEW["synced"] = int(time.time())
+        self.assertIn("Not checked yet: press Check", app.scout_pane(app.connect()))
+        app.scout_sync_open(lambda u: [])                             # within a minute: GitHub isn't asked again
+        self.assertEqual(len(app.SCOUT_REVIEW["items"]), 2)
+        app.SCOUT_REVIEW["synced"] = 0
+        app.scout_sync_open(lambda u: [])                             # all merged or closed
+        self.assertEqual(app.SCOUT_REVIEW["items"], [])
+        self.assertIn("None open.", app.scout_pane(app.connect()))
+        app.SCOUT_REVIEW.update(synced=0, items=[{"number": 8, "title": "t", "url": "u", "user": "", "files": [],
+                                                  "verdict": "ok", "sha": "x"}])
+        def offline(u):
+            raise OSError("offline")
+        app.scout_sync_open(offline)                                  # GitHub away: keep the list, never "None open"
+        self.assertEqual(len(app.SCOUT_REVIEW["items"]), 1)
+        self.assertNotIn("None open.", app.scout_pane(app.connect()))
+        app.SCOUT_REVIEW.update(at=0, error="", items=[], synced=0, sync_ok=False)
 
     def test_channel_memory_and_off_switch(self):
         c = app.connect()
