@@ -151,8 +151,8 @@ the defaults.
     descriptions, scripts that open "In this town, everyone …", melodramatic wording, minutes of non-stop fast
     narration, and only a little for saying it was made with AI). No one clue is enough on its own. To see what it
     makes of one Short: `python3 app.py scout <link or id>`.
-  - **Scan voices** (the optional YakScout plugin, on the NAS with Docker or on another
-    computer): listens to the first 15 seconds of each Short and recognises the synthetic voices farms reuse
+  - **Scan voices** (the optional [YakScout plugin](https://github.com/glenndall/yakscout), on the NAS with
+    Docker or on another computer): listens to the first 15 seconds of each Short and recognises the synthetic voices farms reuse
     across channels (2-4 seconds a Short). YakTube works the same without it.
 
   It never judges Shorts from your subscriptions, and lets a Short through if YouTube won't answer.
