@@ -950,11 +950,12 @@ def scout_pane(c):
         q = urllib.parse.quote(str(v.get("name", "")))
         share = ""
         if v.get("source") != "shared":                   # the shared list wants 2+ channels: a lone one waits here
-            if isinstance(v.get("channels"), int) and v["channels"] >= 2:
+            # 2+ channels and 2+ Shorts (an older YakScout that doesn't count Shorts is judged on channels alone)
+            if isinstance(v.get("channels"), int) and v["channels"] >= 2 and v.get("examples", 2) >= 2:
                 share = (f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
                          'title="Send it to the shared voice list">Share</a>')
             else:
-                share = '<span class="tag" title="The shared list needs a voice heard on 2 channels">Needs 2 channels</span>'
+                share = f'<span class="tag" title="The shared list needs 2 channels and 2 Shorts">{"Needs 2 channels" if not isinstance(v.get("channels"), int) or v["channels"] < 2 else "Needs 2 Shorts"}</span>'
         return share + (f'<button type="button" class="x" data-forget="{n}" aria-label="'
                         f'{"Hide here" if v.get("source") == "shared" else "Forget"}">×</button>')
     vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', e(str(v.get("name", "?"))),
