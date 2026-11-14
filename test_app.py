@@ -919,7 +919,7 @@ class T(unittest.TestCase):
             self.assertIn(f"<h4>{h}</h4>", page)
         self.assertIn('data-p="about"', page)                                         # App version, last
         self.assertIn(app.VERSION, page)
-        self.assertRegex(app.VERSION, r"^\d{4}\.\d\d\.\d\d · [0-9a-f]{7}$")
+        self.assertRegex(app.VERSION, r"^\d+\.\d+ · \d{4}\.\d\d\.\d\d · [0-9a-f]{7}$")      # e.g. 1.0 · 2026.11.14 · 3f9c2a1
         self.assertNotIn("YakTube TV app", page)                                       # (no TV app in a browser)
         # region and language: for the whole of YakTube, sent with every request to YouTube
         try:

@@ -1,5 +1,8 @@
 # YakTube
 
+![YakTube Home on a computer (dark theme): rows of recommendations, each with the reason it was picked](docs/screenshots/home-computer-dark.jpg)
+*Home on a computer (dark theme): recommendations worked out at home, each with the reason it was picked.*
+
 ## 1. Overview & Core Features
 
 - **What it is:** a lightweight, self-hosted YouTube portal: one Python file plus one SQLite database. No Google
@@ -8,6 +11,17 @@
   list, plus a full-screen Shorts player and a TV app.
 - **Privacy & architecture:** no credentials are used or stored. The embedded player still loads from YouTube, so
   YouTube sees your IP address (but not any account).
+
+**Screenshots** (demo data)
+
+| | |
+|---|---|
+| ![YakScout settings on a computer (light theme), with the Dropped list open](docs/screenshots/yakscout-dropped-computer-light.png) | ![YakScout's AI-Farm channels and shared Voices lists (dark theme)](docs/screenshots/yakscout-lists-computer-dark.png) |
+| **YakScout settings** (computer, light): farm Shorts it caught, each with what gave it away and **Bring back** | **YakScout lists** (computer, dark): AI-Farm channels it found, and the shared list of farm voices |
+| ![The TV app's Home with the side panel open](docs/screenshots/tv-home-side-panel-open.jpg) | ![YakTube on a phone: Home (light) and YakScout settings (dark)](docs/screenshots/phone-home-and-yakscout.jpg) |
+| **TV app** (Google TV, Android TV, Fire TV): Home with the side panel open | **Phone:** Home (light theme) and YakScout settings (dark theme) |
+| ![Who's watching? with four profiles](docs/screenshots/profiles-whos-watching.png) | ![The Subscriptions feed on a computer (dark theme)](docs/screenshots/subscriptions-computer-dark.jpg) |
+| **Profiles:** each with its own history, subscriptions and recommendations | **Subscriptions** (computer, dark): newest uploads from your channels, with the Shorts switch |
 
 ## 2. Installation & Setup
 

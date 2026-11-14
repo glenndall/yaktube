@@ -16,13 +16,16 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DB_PATH = os.environ.get("YAK_DB", os.path.join(HERE, "yaktube.db"))
 
 
+RELEASE = "1.0"     # the release number (GitHub Releases); bump it when a new release is tagged
+
+
 def _version():
-    """YakTube's version, worked out from this file: the day it was last updated (copied to the NAS) and a short code
-    that changes with every change to it, e.g. "2026.11.12 · 3f9c2a1". Shown in Settings."""
+    """YakTube's version: the release, then the day this file was last updated (copied to the NAS) and a short code
+    that changes with every change to it, e.g. "1.0 · 2026.11.14 · 3f9c2a1". Shown in Settings."""
     import hashlib
     with open(os.path.abspath(__file__), "rb") as f:
         code = hashlib.sha1(f.read()).hexdigest()[:7]
-    return time.strftime("%Y.%m.%d", time.localtime(os.path.getmtime(os.path.abspath(__file__)))) + " · " + code
+    return f"{RELEASE} · " + time.strftime("%Y.%m.%d", time.localtime(os.path.getmtime(os.path.abspath(__file__)))) + " · " + code
 
 
 VERSION = _version()
@@ -747,7 +750,7 @@ SCOUT_FARM_CLUE = 30                                            # a titles & cap
 
 def gh_get(url, timeout=15):
     """Public GitHub data as JSON (no sign-in, and nothing of YouTube's sent along)."""
-    req = urllib.request.Request(url, headers={"User-Agent": f"YakTube/{VERSION}", "Accept": "application/vnd.github+json"})
+    req = urllib.request.Request(url, headers={"User-Agent": f"YakTube/{RELEASE}", "Accept": "application/vnd.github+json"})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read(2_000_000))
 
@@ -1840,7 +1843,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 .sver span{color:var(--muted)}.sver b{font-weight:500;overflow-wrap:anywhere}
 .sbtns[hidden],.sask[hidden],.sopts[hidden],.sopt[hidden],.spane[hidden]{display:none}.bar .sask{flex-basis:100%}.bar .sask p{margin:0 0 10px}
 form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!important;box-shadow:none!important}
-@media(max-width:720px){.sets{grid-template-columns:1fr}.slist{border:0;padding:0}.spane{padding-top:16px}}
+@media(max-width:720px){.sets{grid-template-columns:minmax(0,1fr)}.sets>*{min-width:0}.slist{border:0;padding:0}.spane{padding-top:16px}.scp .stats{gap:8px}.scp .stat{padding:10px 12px;min-width:0}.scp .stat b{font-size:21px}.scp .stat span{font-size:12px}}
 /* Settings > YakScout: a wider page than the others, left-aligned, in sections */
 .spane.scp{align-items:stretch;text-align:left;max-width:640px;padding-top:28px}
 .scp .sch{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.scp .sch h2{margin:0;flex:1}
