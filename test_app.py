@@ -5,11 +5,12 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app
 
 CID = "UC" + "a" * 22
+# Video i came out (8 - i) days and an hour ago, counted from today, so "4 days ago" stays true whenever this runs
 FEED = f"""<?xml version="1.0"?><feed xmlns:yt="http://www.youtube.com/xml/schemas/2015"
  xmlns:media="http://search.yahoo.com/mrss/" xmlns="http://www.w3.org/2005/Atom"><title>Woz &amp; Friends</title>
 {''.join(f'''<entry><yt:videoId>vid{i:08d}</yt:videoId><yt:channelId>{CID}</yt:channelId><title>Video {i} &lt;b&gt;</title>
 <link rel="alternate" href="https://www.youtube.com/{'shorts/' if i == 3 else 'watch?v='}vid{i:08d}"/>
-<author><name>Woz &amp; Friends</name></author><published>2026-11-0{i+1}T10:00:00+00:00</published>
+<author><name>Woz &amp; Friends</name></author><published>{time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - (8 - i) * 86400 - 3600))}</published>
 <media:group><media:community><media:statistics views="{1234567 * i}"/></media:community></media:group></entry>''' for i in range(1, 5))}
 </feed>"""
 
