@@ -737,6 +737,100 @@ def scout_link_loop():
         SCOUT_WAKE.clear()
 
 
+# Settings > YakScout > Submissions: the open pull requests on the shared voice list, each checked twice at home:
+# the YakScout plugin listens to its example Shorts (same voice?), and the titles & captions check reads them (farm
+# clues?). GitHub's servers can't do the listening (YouTube blocks them), so it happens here. Merging stays on GitHub.
+SCOUT_LIST_REPO = os.environ.get("YAK_SCOUT_LIST_REPO", "glenndall/yakscout-voices")
+SCOUT_REVIEW = {"at": 0, "error": "", "items": []}
+SCOUT_FARM_CLUE = 30                                            # a titles & captions score this high is a farm clue
+
+
+def gh_get(url, timeout=15):
+    """Public GitHub data as JSON (no sign-in, and nothing of YouTube's sent along)."""
+    req = urllib.request.Request(url, headers={"User-Agent": f"YakTube/{VERSION}", "Accept": "application/vnd.github+json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        return json.loads(r.read(2_000_000))
+
+
+def scout_submissions(get=gh_get, repo=None):
+    """Open pull requests on the shared voice list and the voice files each adds or changes:
+    [{number, title, url, user, files: [{name, entry} or {name, error}]}]."""
+    api = f"https://api.github.com/repos/{repo or SCOUT_LIST_REPO}"
+    out = []
+    for pr in get(f"{api}/pulls?state=open&per_page=10")[:10]:
+        files = []
+        for f in get(f"{api}/pulls/{int(pr['number'])}/files?per_page=30")[:30]:
+            name = str(f.get("filename", ""))
+            if not (name.startswith("voices/") and name.endswith(".json")) or f.get("status") == "removed":
+                continue
+            try:
+                files.append({"name": name, "entry": get(f["raw_url"])})
+            except Exception as ex:
+                files.append({"name": name, "error": str(ex)[:80]})
+        out.append({"number": int(pr["number"]), "title": str(pr.get("title", ""))[:120], "url": str(pr.get("html_url", "")),
+                    "user": str(pr.get("user", {}).get("login", ""))[:40], "files": files})
+    return out
+
+
+def scout_judge_entry(entry, verify=None, text=None):
+    """Both checks on one submitted voice, and a plain verdict:
+    ok (looks good to merge), look (same voice but few farm clues: look at the channels), no (don't merge),
+    wait (the voice couldn't be checked)."""
+    verify = verify or (lambda en: scout_call("/verify", {"entry": en}, timeout=300))
+    text = text or scout_check
+    try:
+        heard = verify(entry).get("examples", [])
+    except Exception:
+        heard = []
+    limit = 0.25
+    same = sum(1 for x in heard if isinstance(x.get("gap"), (int, float)) and x["gap"] <= limit)
+    diff = sum(1 for x in heard if isinstance(x.get("gap"), (int, float)) and x["gap"] > limit)
+    examples = [x for x in entry.get("examples", []) if isinstance(x, str) and VID_RE.fullmatch(x)][:10]
+    clues, why = 0, {}
+    for vid in examples:
+        try:
+            r = text(vid) or {}
+        except Exception:
+            r = {}
+        if r.get("score", 0) >= SCOUT_FARM_CLUE:
+            clues += 1
+            for w in r.get("why", []):
+                why[w] = why.get(w, 0) + 1
+    if diff:
+        verdict = "no"
+    elif not same:
+        verdict = "wait"
+    elif clues * 2 >= max(1, len(examples)):
+        verdict = "ok"
+    else:
+        verdict = "look"
+    return {"id": str(entry.get("id", "?"))[:40], "channels": [str(c) for c in entry.get("channels", [])][:20],
+            "verdict": verdict, "same": same, "diff": diff, "heard": len(heard), "examples": len(examples),
+            "clues": clues, "why": [w for w, _ in sorted(why.items(), key=lambda x: -x[1])][:3]}
+
+
+def scout_review(get=gh_get, verify=None, text=None):
+    """Check every open submission (Settings > YakScout > Submissions > Check)."""
+    try:
+        subs = scout_submissions(get)
+        items = []
+        for sub in subs:
+            judged = [scout_judge_entry(f["entry"], verify, text) if "entry" in f and isinstance(f["entry"], dict)
+                      else {"id": f["name"], "verdict": "wait", "error": f.get("error", "not a voice file")} for f in sub["files"]]
+            order = ["no", "wait", "look", "ok"]
+            items.append(dict(sub, files=judged,
+                              verdict=min((j["verdict"] for j in judged), key=order.index) if judged else "none"))
+        SCOUT_REVIEW.update(at=int(time.time()), error="", items=items)
+    except Exception as ex:
+        SCOUT_REVIEW.update(at=int(time.time()), error=str(ex)[:120])
+    return SCOUT_REVIEW
+
+
+SCOUT_VERDICT = {"ok": "✅ Looks good to merge", "look": "⚠️ Same voice, few farm clues: check the channels",
+                 "no": "❌ Don't merge: a different voice in its examples", "wait": "⏸ Couldn't check the voice yet",
+                 "none": "No voice files in it"}
+
+
 def scout_badge(why):
     """What caught a dropped Short, in a word, for its picture in Settings."""
     for word, b in (("voice", "Voice"), ("farm channel", "Channel"), ("description", "Pasted"), ("opening", "Story")):
@@ -834,6 +928,22 @@ def scout_pane(c):
     vinfo = "".join(f'<div class="empty">Shared list: {l.get("count", 0)} voices · '
                     f'{"updated " + ago(l["fetched"]) if l.get("fetched") else "not downloaded yet"}'
                     f'{" · " + e(str(l["error"])[:60]) if l.get("error") else ""}</div>' for l in lists)
+    # submissions to the shared voice list, checked at home
+    def sline(f):
+        if f.get("error"):
+            return f'{e(f["id"])}: {e(f["error"])}'
+        bits = [f'voice {f["same"]}/{f["examples"]} same' + (f', {f["diff"]} different' if f["diff"] else ""),
+                f'farm clues {f["clues"]}/{f["examples"]}' + (f' ({", ".join(f["why"])})' if f["why"] else "")]
+        return f'{e(f["id"])} · ' + " · ".join(e(b) for b in bits)
+    subs = "".join(
+        f'<div class="item sub" data-q="{e((it["title"] + " " + it["user"]).lower())}"><div><span class="t">'
+        f'{SCOUT_VERDICT.get(it["verdict"], "")}</span><small>#{it["number"]} {e(it["title"])}'
+        f'{" · by " + e(it["user"]) if it["user"] else ""}</small>'
+        + "".join(f'<small>{sline(f)}</small>' for f in it["files"]) +
+        f'</div><a class="btn ghost small" href="{e(it["url"])}" target="_blank" rel="noopener">Open</a></div>'
+        for it in SCOUT_REVIEW["items"])
+    sinfo = ('<div class="empty">' + (f'Checked {ago(SCOUT_REVIEW["at"])}' if SCOUT_REVIEW["at"] else "Not checked yet") +
+             (f' · {e(SCOUT_REVIEW["error"])}' if SCOUT_REVIEW["error"] else "") + '</div>')
     # the log: what was judged lately
     log = c.execute("SELECT s.video_id, s.score, s.farm, s.why, s.at, s.deep, v.title, v.channel_title FROM scout s "
                     "LEFT JOIN videos v ON v.id=s.video_id ORDER BY s.at DESC LIMIT 100").fetchall()
@@ -864,6 +974,10 @@ def scout_pane(c):
             fold("voice", "Voices", len(voices), vlist or ('<div class="empty">None learned yet.</div>' if st == "ok" else
                  '<div class="empty">Shows when YakScout is connected.</div>'),
                  (add("voice", "Link to a farm Short", "Learn") + vinfo) if st == "ok" else "") +
+            fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
+                 subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["at"] and not SCOUT_REVIEW["error"] else ""),
+                 '<div class="tools"><button type="button" class="btn small" data-review>Check</button>'
+                 '<span class="msg" role="status"></span></div>' + sinfo) +
             fold("log", "Log", len(log), logs or none,
                  '<div class="tools"><input type="search" placeholder="Search" data-filter="log" aria-label="Search">'
                  '<a class="btn ghost small" href="/scout/log.csv" download>Download CSV</a></div>') +
@@ -1744,6 +1858,7 @@ form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!
 .scp .x{flex:none;border:0;background:none;color:var(--muted);font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;border-radius:8px}
 .scp .x:hover,.scp .x:focus-visible{color:var(--fg);background:var(--line)}
 .scp .empty{padding:12px 16px;color:var(--muted);font-size:13px}
+.scp .item.sub small{white-space:normal}.scp .item.sub .t{white-space:normal;font-weight:500}
 .scp .slider{display:flex;align-items:center;gap:10px;flex:none}.scp .slider input{width:140px;accent-color:var(--accent)}
 .scp .slider b{min-width:2ch;text-align:right}
 .scp select.btn{width:auto;flex:none;min-height:34px;padding:0 10px}.scp a.btn,.scp label.btn{width:auto;flex:none;min-height:34px;padding:0 14px;cursor:pointer}
@@ -2504,6 +2619,10 @@ p.addEventListener("click",function(ev){var b=ev.target.closest("button");if(!b)
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
     b.closest(".item").remove();count(d)}
+  else if(b.hasAttribute("data-review")){var rm2=b.nextElementSibling;b.disabled=true;rm2.className="msg";
+    rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
+    .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}now()})
+    .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}
   else if(b.dataset.forget){var d2=b.closest("details");b.disabled=true;post("/scout/voice","op=forget&v="+encodeURIComponent(b.dataset.forget))
     .then(function(r){if(r.ok){b.closest(".item").remove();count(d2)}else b.disabled=false})}});
 p.addEventListener("submit",function(ev){var f=ev.target,kind=f.dataset.add;if(!kind)return;ev.preventDefault();
@@ -2760,7 +2879,7 @@ class App(BaseHTTPRequestHandler):
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/tv/more"): self.tv_more, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("GET", "/settings"): self.settings,
-                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/share"): self.scout_share, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
+                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/share"): self.scout_share, ("POST", "/scout/review"): self.scout_review_route, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
                 return self.send(layout("Not found", '<div class="empty"><h1>Not found</h1></div>', self.prof), 404)
@@ -3650,6 +3769,11 @@ class App(BaseHTTPRequestHandler):
                         "Scanned" if r["deep"] else "Read", r["score"], r["title"] or "", r["channel_title"] or "",
                         r["why"] or "", "https://www.youtube.com/shorts/" + r["video_id"]])
         return "\ufeff" + out.getvalue()                                    # the mark tells Excel it's UTF-8
+
+    def scout_review_route(self):
+        """Settings > YakScout > Submissions > Check: check every open submission now (takes a while: it listens)."""
+        r = scout_review()
+        self.send(json.dumps({"ok": not r["error"], "error": r["error"], "n": len(r["items"])}), ctype="application/json")
 
     def scout_share(self):
         """Settings > YakScout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""

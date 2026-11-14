@@ -172,6 +172,10 @@ the defaults.
 - **Voices:** the plugin's learned farm voices and the channels each was heard on. A voice on 2 or more channels drops a
   Short by itself (50 points); one from a single channel needs one more clue (35). Paste a farm Short's link and
   **Learn**; **×** forgets one. Shown while the plugin is connected.
+- **Submissions:** the open pull requests on the shared voice list. **Check** listens to each one's example Shorts
+  with the plugin (same voice?) and reads them with the titles & captions check (farm clues?), here at home, since
+  YouTube blocks GitHub's servers. Each gets one verdict: ✅ looks good to merge, ⚠️ same voice but few farm clues
+  (look at the channels), ❌ don't merge, or ⏸ couldn't check yet. **Open** takes you to the pull request to merge it.
 - **Log:** the last 100 verdicts, *Read* (titles & captions) or *Scanned* (the plugin listened too), with score and
   reasons. **Download CSV** saves every verdict still remembered, for Numbers or Excel.
 - **Advanced:** **Drop at** (30-90; lower catches more and risks more mistakes), **Remember for** (30, 60 or 90 days,

@@ -1362,6 +1362,45 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(req("/scout/restore", b"nonsense")[0], 400)
         c.close()
 
+    def test_submissions(self):
+        """Settings > YakScout > Submissions: open pull requests on the voice list, checked twice, one plain verdict."""
+        api = "https://api.github.com/repos/glenndall/yakscout-voices"
+        e1 = {"id": "farm-0003", "channels": ["A", "B"], "examples": ["aaaaaaaaaaa", "bbbbbbbbbbb"], "print": [0.0] * 512}
+        e2 = dict(e1, id="farm-0004", examples=["ccccccccccc", "ddddddddddd"])
+        pages = {f"{api}/pulls?state=open&per_page=10": [{"number": 7, "title": "Add farm-0003", "html_url": "https://gh/7",
+                                                        "user": {"login": "someone"}},
+                                                       {"number": 8, "title": "Add farm-0004", "html_url": "https://gh/8",
+                                                        "user": {"login": "other"}}],
+                 f"{api}/pulls/7/files?per_page=30": [{"filename": "voices/farm-0003.json", "status": "added", "raw_url": "raw7"},
+                                                     {"filename": "README.md", "status": "modified", "raw_url": "x"}],
+                 f"{api}/pulls/8/files?per_page=30": [{"filename": "voices/farm-0004.json", "status": "added", "raw_url": "raw8"}],
+                 "raw7": e1, "raw8": e2}
+        gaps = {"aaaaaaaaaaa": 0.1, "bbbbbbbbbbb": 0.12, "ccccccccccc": 0.1, "ddddddddddd": 0.9}
+        verify = lambda en: {"examples": [{"id": v, "gap": gaps[v]} for v in en["examples"]]}
+        farm = {"aaaaaaaaaaa": {"score": 50, "why": ["world-rule opening"]}, "bbbbbbbbbbb": {"score": 30, "why": ["farm description"]}}
+        text = lambda vid: farm.get(vid, {"score": 0, "why": []})
+        r = app.scout_review(lambda u: pages[u], verify, text)
+        self.assertEqual(r["error"], "")
+        self.assertEqual([(i["number"], i["verdict"]) for i in r["items"]], [(7, "ok"), (8, "no")])
+        f = r["items"][0]["files"][0]
+        self.assertEqual((f["same"], f["diff"], f["clues"], f["why"]), (2, 0, 2, ["world-rule opening", "farm description"]))
+        # same voice but no farm clues: look at the channels; nothing heard: wait
+        self.assertEqual(app.scout_judge_entry(e1, verify, lambda v: {"score": 0})["verdict"], "look")
+        self.assertEqual(app.scout_judge_entry(e1, lambda en: {"examples": []}, text)["verdict"], "wait")
+        def broken(en):
+            raise OSError("plugin off")
+        self.assertEqual(app.scout_judge_entry(e1, broken, text)["verdict"], "wait")
+        page = app.scout_pane(app.connect())
+        self.assertIn('id="sf-subs"', page)
+        self.assertIn("✅ Looks good to merge", page)
+        self.assertIn("❌ Don&#x27;t merge" if "&#x27;" in page else "❌ Don't merge", page)
+        self.assertIn('href="https://gh/7"', page)
+        self.assertIn("voice 2/2 same · farm clues 2/2 (world-rule opening, farm description)", page)
+        def down(u):
+            raise OSError("rate limited")
+        self.assertIn("rate limited", app.scout_review(down)["error"])
+        app.SCOUT_REVIEW.update(at=0, error="", items=[])
+
     def test_channel_memory_and_off_switch(self):
         c = app.connect()
         for i in range(3):                                                # a channel with 3 Shorts, all judged a farm's
