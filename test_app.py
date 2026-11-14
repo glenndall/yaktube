@@ -1209,6 +1209,7 @@ class ScoutTests(unittest.TestCase):
                     return r.status, r.read().decode()
             except urllib.error.HTTPError as ex:
                 return ex.code, ex.read().decode()
+        call.port = srv.server_port
         return call
 
     def test_channel_lists(self):
@@ -1296,6 +1297,15 @@ class ScoutTests(unittest.TestCase):
         self.assertIn("Shared list: 2 voices · updated 2 hours ago", page)
         code, body = call("/scout/share?name=tbQTA6u4lEM")
         self.assertEqual((code, json.loads(body)["id"]), (200, "tbqta6u4lem"))
+        import http.client
+        conn = http.client.HTTPConnection("127.0.0.1", call.port)
+        conn.request("GET", "/scout/submit?name=tbQTA6u4lEM", headers={"Cookie": f"yak_profile={pid}"})
+        r = conn.getresponse()
+        to = urllib.parse.urlsplit(r.getheader("Location"))
+        q = urllib.parse.parse_qs(to.query)
+        self.assertEqual((r.status, to.netloc, to.path), (303, "github.com", "/glenndall/yakscout-voices/issues/new"))
+        self.assertEqual((q["template"], q["channels"], q["title"]), (["submit-voice.yml"], ["Drip Dyl"], ["Voice: Drip Dyl"]))
+        self.assertIn('data-submit="/scout/submit?name=tbQTA6u4lEM"', page)
         self.assertIn("<b>2.4 s</b> a Short", page)
         self.assertIn("Up <b>2 hours</b>", page)
         self.assertIn("Plugin <b>v0.4</b>", page)

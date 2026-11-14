@@ -944,8 +944,9 @@ def scout_pane(c):
         return " · ".join(bits + ([f'learned {v["learned"]}'] if v.get("learned") else []))
     def vbtn(v):
         n = e(str(v.get("name", "")))
-        share = (f'<a class="btn ghost small" href="/scout/share?name={urllib.parse.quote(str(v.get("name", "")))}" download '
-                 'title="A file to send to the shared voice list">Share</a>') if v.get("source") != "shared" else ""
+        q = urllib.parse.quote(str(v.get("name", "")))
+        share = (f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
+                 'title="Send it to the shared voice list">Share</a>') if v.get("source") != "shared" else ""
         return share + (f'<button type="button" class="x" data-forget="{n}" aria-label="'
                         f'{"Hide here" if v.get("source") == "shared" else "Forget"}">×</button>')
     vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', e(str(v.get("name", "?"))),
@@ -2645,7 +2646,8 @@ p.addEventListener("input",function(ev){var k=ev.target.dataset.filter;if(k){var
   document.querySelectorAll("#sf-"+k+" .item").forEach(function(r){r.hidden=q&&r.dataset.q.indexOf(q)<0})}
   if(ev.target.dataset.set=="min")ev.target.nextElementSibling.textContent=ev.target.value});
 p.addEventListener("change",function(ev){var k=ev.target.dataset.set;if(k)post("/settings/scout","k="+k+"&v="+ev.target.value)});
-p.addEventListener("click",function(ev){var b=ev.target.closest("button");if(!b)return;
+p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]");if(a){window.open(a.dataset.submit,"_blank","noopener")}
+  var b=ev.target.closest("button");if(!b)return;
   if(b.dataset.k){var on=!b.classList.contains("on");b.classList.toggle("on",on);b.setAttribute("aria-checked",on);
     b.firstChild.nodeValue=on?"On":"Off";post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again()}
   else if(b.dataset.keep){post("/scout/keep","v="+b.dataset.keep);var s=document.createElement("span");s.className="sdone";
@@ -2913,7 +2915,7 @@ class App(BaseHTTPRequestHandler):
                  ("POST", "/subs/remove"): self.sub_remove, ("POST", "/refresh"): self.refresh, ("POST", "/feed/shorts"): self.feed_shorts,
                  ("GET", "/foryou"): lambda: self.redirect("/"), ("GET", "/shorts"): self.shorts, ("POST", "/tv/more"): self.tv_more, ("POST", "/shorts/more"): self.shorts_more, ("POST", "/seen"): self.seen, ("GET", "/new"): self.newtoyou, ("GET", "/search"): self.search, ("GET", "/related"): self.related,
                  ("GET", "/history"): self.history, ("GET", "/settings"): self.settings,
-                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/share"): self.scout_share, ("POST", "/scout/review"): self.scout_review_route, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
+                 ("POST", "/settings/region"): self.settings_region, ("POST", "/settings/scout"): self.settings_scout, ("POST", "/scout/keep"): self.scout_keep, ("POST", "/scout/channel"): self.scout_channel, ("POST", "/scout/voice"): self.scout_voice, ("GET", "/scout/backup"): self.scout_backup, ("POST", "/scout/restore"): self.scout_restore, ("GET", "/scout/log.csv"): self.scout_log_csv, ("GET", "/scout/share"): self.scout_share, ("GET", "/scout/submit"): self.scout_submit, ("POST", "/scout/review"): self.scout_review_route, ("GET", "/scout/stats"): self.scout_stats, ("POST", "/settings/clear"): self.settings_clear, ("POST", "/history/clear"): self.history_clear,
                  ("POST", "/history/remove"): self.history_remove}.get((method, u.path))
             if not h:
                 return self.send(layout("Not found", '<div class="empty"><h1>Not found</h1></div>', self.prof), 404)
@@ -3808,6 +3810,19 @@ class App(BaseHTTPRequestHandler):
         """Settings > YakScout > Submissions > Check: check every open submission now (takes a while: it listens)."""
         r = scout_review()
         self.send(json.dumps({"ok": not r["error"], "error": r["error"], "n": len(r["items"])}), ctype="application/json")
+
+    def scout_submit(self):
+        """Share's second half: opens the shared list's "Submit a farm voice" form on GitHub with the voice's example
+        Shorts and channels filled in (the voice file itself is dragged in: Share downloads it)."""
+        name = urllib.parse.parse_qs(urllib.parse.urlsplit(self.path).query).get("name", [""])[0]
+        try:
+            entry = scout_call("/share?name=" + urllib.parse.quote(name), timeout=10) if SCOUT_LINK["state"] == "ok" else {}
+        except Exception:
+            entry = {}
+        q = {"template": "submit-voice.yml", "title": "Voice: " + ", ".join(entry.get("channels", [])[:3]),
+             "examples": "\n".join("https://youtube.com/shorts/" + x for x in entry.get("examples", [])[:10]),
+             "channels": "\n".join(entry.get("channels", [])[:20])}
+        self.redirect(f"https://github.com/{SCOUT_LIST_REPO}/issues/new?" + urllib.parse.urlencode(q))
 
     def scout_share(self):
         """Settings > YakScout > Voices > Share: a learned voice as a file for the shared voice list (from the plugin)."""

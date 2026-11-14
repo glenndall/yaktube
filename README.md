@@ -169,9 +169,10 @@ the defaults.
   3 or more of its Shorts and dropped over half; you can add one by name, which drops its Shorts already in the list.
   **×** takes one off (one YakScout found stays off).
 - **Never drop:** channels whose Shorts are always kept, whatever they score. Adding one brings its dropped Shorts back.
-- **Voices:** the plugin's learned farm voices and the channels each was heard on. A voice on 2 or more channels drops a
-  Short by itself (50 points); one from a single channel needs one more clue (35). Paste a farm Short's link and
-  **Learn**; **×** forgets one. Shown while the plugin is connected.
+- **Voices:** the plugin's learned farm voices and the channels each was heard on. A voice on 2 or more channels drops
+  a Short by itself (50 points); one from a single channel needs one more clue (35). Paste a farm Short's link and
+  **Learn**; **×** forgets one. Shown while the plugin is connected. **Share** on one you learned downloads it and
+  opens the shared list's *Submit a farm voice* form, filled in: drag the file in and press Create.
 - **Submissions:** the open pull requests on the shared voice list. **Check** listens to each one's example Shorts
   with the plugin (same voice?) and reads them with the titles & captions check (farm clues?), here at home, since
   YouTube blocks GitHub's servers. Each gets one verdict: ✅ looks good to merge, ⚠️ same voice but few farm clues
