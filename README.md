@@ -120,8 +120,7 @@ the defaults.
 - **Picks up where you left off:** a video you stopped part-way resumes from there, for each profile.
 - **History:** a video counts as watched once it has played for 10 seconds, not when you open it. Remove single videos
   or clear it all; removing a video also removes its influence on suggestions.
-- **Watch later:** the Watch later button under a video saves it to **Later**; it leaves once you've watched it to the
-  end.
+- **Watch later:** the Watch later button under a video saves it to **Later**
 - **Thumbs up / down:** under a video and beside a Short. A thumbs up brings in more like it (and that channel); a
   thumbs down drops its "up next" from your suggestions and sinks its channel. Thumbed-down Shorts leave Home.
 - **Videos start with captions off.** Where the browser blocks autoplay (iPhone, Safari), press play. In Shorts, a
