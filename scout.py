@@ -668,7 +668,7 @@ p.querySelectorAll("details.fold").forEach(function(d){d.addEventListener("toggl
 function subs(){fetch("/settings").then(function(r){return r.text()}).then(function(h){   // Submissions on/off, in place
   var d=new DOMParser().parseFromString(h,"text/html"),nv=d.querySelector("#sf-voice .sclist"),ov=p.querySelector("#sf-voice .sclist");
   if(nv&&ov)ov.innerHTML=nv.innerHTML;var ns=d.getElementById("sf-subs"),os=document.getElementById("sf-subs");
-  if(os)os.remove();if(ns)document.getElementById("sf-voice").after(ns)}).catch(function(){})}
+  if(os){if(ns&&os.open)ns.open=true;os.remove()}if(ns)document.getElementById("sf-voice").after(ns)}).catch(function(){})}
 function count(d){var n=d.querySelector(".n");if(n)n.textContent="· "+d.querySelectorAll(".item").length}
 p.addEventListener("input",function(ev){var k=ev.target.dataset.filter;if(k){var q=ev.target.value.toLowerCase();
   document.querySelectorAll("#sf-"+k+" .item").forEach(function(r){r.hidden=q&&r.dataset.q.indexOf(q)<0})}
@@ -686,7 +686,7 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
   else if(b.hasAttribute("data-review")){var rm2=b.nextElementSibling;b.disabled=true;rm2.className="msg";
     rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
     .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}
-      now()})
+      subs()})
     .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}
   else if(b.dataset.forget){var d2=b.closest("details");b.disabled=true;post("/scout/voice","op=forget&v="+encodeURIComponent(b.dataset.forget))
     .then(function(r){if(r.ok){b.closest(".item").remove();count(d2)}else b.disabled=false})}});
