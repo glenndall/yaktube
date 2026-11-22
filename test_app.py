@@ -3,6 +3,7 @@ import json, os, re, sys, tempfile, threading, time, unittest, urllib.error, url
 os.environ["YAK_DB"] = os.path.join(tempfile.mkdtemp(), "t.db")
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import app
+import scout
 
 CID = "UC" + "a" * 22
 # Video i came out (8 - i) days and an hour ago, counted from today, so "4 days ago" stays true whenever this runs
@@ -47,7 +48,7 @@ def fake_fetch(url, timeout=10):
     if "woz" in url or "watch?v=" in url: return f'<link rel="canonical" href="https://www.youtube.com/channel/{CID}">'
     raise IOError("no network in tests")
 app.fetch = fake_fetch
-app.gh_get = lambda *a, **k: (_ for _ in ()).throw(IOError("no network in tests"))   # GitHub too
+scout.gh_get = lambda *a, **k: (_ for _ in ()).throw(IOError("no network in tests"))   # GitHub too
 
 class T(unittest.TestCase):
     @classmethod
@@ -1055,35 +1056,35 @@ class ScoutTests(unittest.TestCase):
         c.execute("DELETE FROM scout"); c.execute("DELETE FROM videos"); c.execute("DELETE FROM outside")
         c.execute("DELETE FROM settings WHERE k LIKE 'scout_%'"); c.execute("DELETE FROM scout_chan")
         c.close()
-        self.keep = (dict(app.SCOUT_CFG), app.post_json, app.fetch, app.OUTSIDE[:])
-        app.SCOUT_CFG.update(text="1", on="0", addr="", port="8095", seen="0", min="", days="60")
-        app.SCOUT_LINK.update(state="", error="", voices=[], version="", up=0, secs=0.0, last=0)
+        self.keep = (dict(scout.SCOUT_CFG), app.post_json, app.fetch, app.OUTSIDE[:])
+        scout.SCOUT_CFG.update(text="1", on="0", addr="", port="8095", seen="0", min="", days="60")
+        scout.SCOUT_LINK.update(state="", error="", voices=[], version="", up=0, secs=0.0, last=0)
 
     def tearDown(self):
         app.post_json, app.fetch = self.keep[1:3]
-        app.SCOUT_CFG.clear(); app.SCOUT_CFG.update(self.keep[0])
+        scout.SCOUT_CFG.clear(); scout.SCOUT_CFG.update(self.keep[0])
         app.OUTSIDE[:] = self.keep[3]
 
     def test_score(self):
         long_story = self.STORY * 8                                       # ~330 words
-        score, why = app.scout_score("Everyone Lives In Tiny Cabins", "", long_story, 75)
-        self.assertGreaterEqual(score, app.SCOUT_MIN)                     # world-rule opening + non-stop fast narration
+        score, why = scout.scout_score("Everyone Lives In Tiny Cabins", "", long_story, 75)
+        self.assertGreaterEqual(score, scout.SCOUT_MIN)                     # world-rule opening + non-stop fast narration
         self.assertIn("world-rule opening", why)
-        self.assertEqual(app.scout_score("Fixing my sink", "", "okay so first you turn the water off. " * 8, 60)[0], 0)
-        self.assertLess(app.scout_score("Cats", "cute #aicat #cat", "", 20)[0], app.SCOUT_MIN)      # made with AI isn't a farm
-        self.assertEqual(app.scout_score("My cat as a knight", "Made with Sora #aiart", "", 20), (10, ["made with AI"]))
-        self.assertGreaterEqual(app.scout_score("Funny", "Welcome to our Cats channel. Educational & Entertainment Notice", "", 20)[0], app.SCOUT_MIN)
-        self.assertLess(app.scout_score("GPT-5 reviewed #ai #aitools", "", "", 30)[0], app.SCOUT_MIN)   # talking about AI
-        self.assertLess(app.scout_score("POV: you what if part 2 #pov #storytime", "", "", 30)[0], app.SCOUT_MIN)  # clickbait alone isn't enough
-        self.assertLess(app.scout_score("x", "", "In this world where " + "word " * 40, 30)[0], app.SCOUT_MIN)    # one signal isn't enough
-        self.assertEqual(app.scout_score("", "", "In a world where " + "hello " * 4, 5)[0], 0)             # too short to read
+        self.assertEqual(scout.scout_score("Fixing my sink", "", "okay so first you turn the water off. " * 8, 60)[0], 0)
+        self.assertLess(scout.scout_score("Cats", "cute #aicat #cat", "", 20)[0], scout.SCOUT_MIN)      # made with AI isn't a farm
+        self.assertEqual(scout.scout_score("My cat as a knight", "Made with Sora #aiart", "", 20), (10, ["made with AI"]))
+        self.assertGreaterEqual(scout.scout_score("Funny", "Welcome to our Cats channel. Educational & Entertainment Notice", "", 20)[0], scout.SCOUT_MIN)
+        self.assertLess(scout.scout_score("GPT-5 reviewed #ai #aitools", "", "", 30)[0], scout.SCOUT_MIN)   # talking about AI
+        self.assertLess(scout.scout_score("POV: you what if part 2 #pov #storytime", "", "", 30)[0], scout.SCOUT_MIN)  # clickbait alone isn't enough
+        self.assertLess(scout.scout_score("x", "", "In this world where " + "word " * 40, 30)[0], scout.SCOUT_MIN)    # one signal isn't enough
+        self.assertEqual(scout.scout_score("", "", "In a world where " + "hello " * 4, 5)[0], 0)             # too short to read
         melo = "the forbidden outcast whispered about destiny. " * 6
-        self.assertIn("melodrama", " ".join(app.scout_score("", "", melo, 40)[1]))
+        self.assertIn("melodrama", " ".join(scout.scout_score("", "", melo, 40)[1]))
 
     def test_text(self):
         xml = ('<timedtext format="3"><body><p t="0" d="1500"><s>Hello</s><s t="400"> there</s></p>'
                '<p t="1500" d="1000" a="1">\n</p><p t="2500" d="2000">[music] and bye</p></body></timedtext>')
-        self.assertEqual(app.scout_text(xml), ("Hello there and bye", 4))
+        self.assertEqual(scout.scout_text(xml), ("Hello there and bye", 4))
 
     def _wire(self, details, calls):
         cap = lambda url: '<timedtext><body><p t="0" d="60000">' + (self.STORY * 8 if "st0000" in url else "okay first turn the water off. " * 8) + '</p></body></timedtext>'
@@ -1103,13 +1104,13 @@ class ScoutTests(unittest.TestCase):
                    "st000000000": ("Cabins", "")}
         calls = []
         self._wire(details, calls)
-        app.SCOUT_CFG["text"] = "1"
+        scout.SCOUT_CFG["text"] = "1"
         c = app.connect()
         c.executemany("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)", [
             ("ok000000000", "Fixing a sink", "Handy"), ("ai000000000", "Cats", "Meow"), ("st000000000", "Cabins", "Tales"),
             ("err00000000", "?", "Net"), ("nodata000000", "?", "Gone")])
         app.OUTSIDE[:] = ["ok000000000", "ai000000000", "st000000000", "err00000000", "nodata000000"]
-        app.scout_outside(c)
+        scout.scout_outside(c)
         # the farm story is gone; the AI-tagged cat isn't a farm's, so it stays; so do the one that can't be judged
         # (offline) and the one YouTube knows nothing of
         self.assertEqual(app.OUTSIDE, ["ok000000000", "ai000000000", "err00000000", "nodata000000"])
@@ -1118,33 +1119,33 @@ class ScoutTests(unittest.TestCase):
         # next batch: only what hasn't been judged is asked about again
         calls.clear()
         app.OUTSIDE[:] = ["ok000000000", "ai000000000", "st000000000", "err00000000"]
-        app.scout_outside(c)
+        scout.scout_outside(c)
         self.assertEqual(calls, ["err00000000"])
         self.assertEqual(app.OUTSIDE, ["ok000000000", "ai000000000", "err00000000"])
         c.close()
 
     def test_scan_during_text_check(self):
         """The Scout plugin answers while the text check is still running: the two add up, neither is lost."""
-        keep = app.scout_check
-        app.SCOUT_CFG["text"] = "1"
+        keep = scout.scout_check
+        scout.SCOUT_CFG["text"] = "1"
         c = app.connect()
         c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('race0000000','Tale','Voxly',1)")
 
         def text_check(vid):
             c2 = app.connect()
-            app.scout_verdict(c2, vid, 35, ["same voice as x"])      # Scout gets there first
+            scout.scout_verdict(c2, vid, 35, ["same voice as x"])      # Scout gets there first
             c2.commit(); c2.close()
             return {"score": 20, "farm": 0, "why": ["non-stop fast narration"]}
         try:
-            app.scout_check = text_check
+            scout.scout_check = text_check
             app.OUTSIDE[:] = ["race0000000"]
-            app.scout_outside(c)
+            scout.scout_outside(c)
         finally:
-            app.scout_check = keep
+            scout.scout_check = keep
         row = c.execute("SELECT score, farm, deep, why FROM scout WHERE video_id='race0000000'").fetchone()
         self.assertEqual(tuple(row), (55, 1, 1, "non-stop fast narration; same voice as x"))
         self.assertEqual(app.OUTSIDE, [])
-        self.assertEqual(app.scout_queue(c), [])                       # not handed to Scout a second time
+        self.assertEqual(scout.scout_queue(c), [])                       # not handed to Scout a second time
         c.close()
 
     def _fake_scout(self, looks):
@@ -1192,24 +1193,24 @@ class ScoutTests(unittest.TestCase):
         port, seen = self._fake_scout({"qa000000000": (200, {"score": 35, "why": ["same voice as x"]}),
                                        "qb000000000": (200, {"score": 15, "why": ["word-by-word captions"]}),
                                        "qc000000000": (502, {"error": "Video unavailable"})})
-        self.assertEqual(app.scout_link_once(), 30)                                     # off until it's set up
-        self.assertEqual(app.SCOUT_LINK["state"], "off")
-        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
+        self.assertEqual(scout.scout_link_once(), 30)                                     # off until it's set up
+        self.assertEqual(scout.SCOUT_LINK["state"], "off")
+        scout.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
         for _ in range(5):
-            app.scout_link_once()
-        self.assertEqual(app.SCOUT_LINK["state"], "ok")
-        self.assertEqual(app.SCOUT_LINK["voices"][0]["name"], "tbQTA6u4lEM")
+            scout.scout_link_once()
+        self.assertEqual(scout.SCOUT_LINK["state"], "ok")
+        self.assertEqual(scout.SCOUT_LINK["voices"][0]["name"], "tbQTA6u4lEM")
         self.assertEqual(seen, ["qa000000000", "qb000000000", "qc000000000", "qc000000000"])   # one at a time; 2 tries
         self.assertEqual(app.OUTSIDE, ["qb000000000", "qc000000000"])                   # 30 + 35: the farm is gone
         self.assertNotIn("qa000000000", [r[0] for r in c.execute("SELECT video_id FROM outside")])
         self.assertEqual(c.execute("SELECT score, farm, why, deep FROM scout WHERE video_id='qa000000000'").fetchone()[:],
                          (65, 1, "world-rule opening; same voice as x", 1))
         self.assertEqual(c.execute("SELECT why FROM scout WHERE video_id='qc000000000'").fetchone()[0], "couldn't scan")
-        self.assertEqual(app.scout_queue(c), [])                                         # all watched
-        self.assertGreater(int(app.SCOUT_CFG["seen"]), 0)
-        app.SCOUT_CFG["port"] = "1"                                                      # nothing there
-        self.assertEqual(app.scout_link_once(), 60)
-        self.assertEqual(app.SCOUT_LINK["state"], "down")
+        self.assertEqual(scout.scout_queue(c), [])                                         # all watched
+        self.assertGreater(int(scout.SCOUT_CFG["seen"]), 0)
+        scout.SCOUT_CFG["port"] = "1"                                                      # nothing there
+        self.assertEqual(scout.scout_link_once(), 60)
+        self.assertEqual(scout.SCOUT_LINK["state"], "down")
         c.close()
 
     def test_settings_and_bring_back(self):
@@ -1237,18 +1238,18 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(dict(c.execute("SELECT k, v FROM settings WHERE k IN ('scout_addr','scout_port','scout_on')").fetchall()),
                          {"scout_addr": "192.168.1.31", "scout_port": "9000", "scout_on": "1"})   # kept over a restart
         self.assertEqual(post("/settings/scout", k="addr", v="scout.local", port="8095")[0], 200)
-        self.assertEqual(app.SCOUT_CFG["addr"], "scout.local")
+        self.assertEqual(scout.SCOUT_CFG["addr"], "scout.local")
         self.assertEqual(post("/settings/scout", k="addr", v="not an address", port="8095")[0], 400)
         self.assertEqual(post("/settings/scout", k="addr", v="scout.local", port="70000")[0], 400)
-        self.assertEqual(app.SCOUT_CFG["addr"], "scout.local")                           # bad ones don't change it
+        self.assertEqual(scout.SCOUT_CFG["addr"], "scout.local")                           # bad ones don't change it
         self.assertEqual(post("/settings/scout", k="text", v="0")[0], 200)
-        self.assertEqual(app.SCOUT_CFG["text"], "0")
+        self.assertEqual(scout.SCOUT_CFG["text"], "0")
         self.assertEqual(post("/settings/scout", k="nope", v="1")[0], 400)
         # Bring back: back at the front of Shorts, and never dropped again
         app.OUTSIDE[:] = ["zz000000000"]
         self.assertEqual(post("/scout/keep", v="qd000000000")[0], 204)
         self.assertEqual(app.OUTSIDE, ["qd000000000", "zz000000000"])
-        self.assertEqual(app.scout_verdict(c, "qd000000000", 35, ["same voice as x"]), False)
+        self.assertEqual(scout.scout_verdict(c, "qd000000000", 35, ["same voice as x"]), False)
         self.assertEqual(app.OUTSIDE, ["qd000000000", "zz000000000"])
         self.assertEqual(post("/scout/keep", v="unknown0000")[0], 400)
         c.close()
@@ -1279,34 +1280,34 @@ class ScoutTests(unittest.TestCase):
         c.execute("INSERT INTO scout(video_id,score,farm,why,at) VALUES('k1000000000',60,1,'world-rule opening',0)")
         c.executemany("INSERT INTO scout(video_id,score,farm,why,at) VALUES(?,90,1,'x',0)", [(f"au00000000{i}",) for i in range(3)])
         app.OUTSIDE[:] = ["f1000000000", "x1000000000"]
-        self.assertTrue(app.scout_set_channel(c, "farm", "  ch   FARM "))           # any case, extra spaces
+        self.assertTrue(scout.scout_set_channel(c, "farm", "  ch   FARM "))           # any case, extra spaces
         self.assertEqual(app.OUTSIDE, ["x1000000000"])                           # its Shorts leave the list now
         self.assertEqual(c.execute("SELECT farm FROM scout WHERE video_id='f1000000000'").fetchone()[0], 1)
-        self.assertEqual(app.scout_channels(c), {"ch farm", "auto"})
-        self.assertTrue(app.scout_set_channel(c, "keep", "good guy"))            # Never drop: its dropped Short comes back
+        self.assertEqual(scout.scout_channels(c), {"ch farm", "auto"})
+        self.assertTrue(scout.scout_set_channel(c, "keep", "good guy"))            # Never drop: its dropped Short comes back
         self.assertEqual(app.OUTSIDE, ["k1000000000", "x1000000000"])
-        self.assertFalse(app.scout_verdict(c, "k2000000000", 95, ["farm voice (4 channels)"]))   # and none get dropped
-        self.assertTrue(app.scout_set_channel(c, "farm", "Auto", add=False))     # taking off one Scout found
-        self.assertEqual(app.scout_channels(c), {"ch farm"})
-        self.assertEqual(list(app.scout_lists(c)["ok"]), ["auto"])
-        self.assertTrue(app.scout_set_channel(c, "farm", "ch farm", add=False))
-        self.assertEqual(app.scout_channels(c), set())
-        self.assertFalse(app.scout_set_channel(c, "farm", "   "))
-        self.assertFalse(app.scout_set_channel(c, "nope", "x"))
+        self.assertFalse(scout.scout_verdict(c, "k2000000000", 95, ["farm voice (4 channels)"]))   # and none get dropped
+        self.assertTrue(scout.scout_set_channel(c, "farm", "Auto", add=False))     # taking off one Scout found
+        self.assertEqual(scout.scout_channels(c), {"ch farm"})
+        self.assertEqual(list(scout.scout_lists(c)["ok"]), ["auto"])
+        self.assertTrue(scout.scout_set_channel(c, "farm", "ch farm", add=False))
+        self.assertEqual(scout.scout_channels(c), set())
+        self.assertFalse(scout.scout_set_channel(c, "farm", "   "))
+        self.assertFalse(scout.scout_set_channel(c, "nope", "x"))
         c.close()
 
     def test_drop_score_and_memory(self):
         c = app.connect()
-        app.SCOUT_CFG["min"] = "70"
-        self.assertFalse(app.scout_verdict(c, "m1000000000", 60, ["x"]))          # under the drop score you chose
-        app.SCOUT_CFG["min"] = ""
-        self.assertTrue(app.scout_verdict(c, "m2000000000", 60, ["x"]))           # the default, 50
+        scout.SCOUT_CFG["min"] = "70"
+        self.assertFalse(scout.scout_verdict(c, "m1000000000", 60, ["x"]))          # under the drop score you chose
+        scout.SCOUT_CFG["min"] = ""
+        self.assertTrue(scout.scout_verdict(c, "m2000000000", 60, ["x"]))           # the default, 50
         now = int(time.time())
         c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('old00000000',0,0,'',?,0)", (now - 40 * 86400,))
         c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('kept0000000',0,0,'',?,1)", (now - 400 * 86400,))
         app.tidy(c, now)
         self.assertIsNotNone(c.execute("SELECT 1 FROM scout WHERE video_id='old00000000'").fetchone())   # 60 days
-        app.SCOUT_CFG["days"] = "30"
+        scout.SCOUT_CFG["days"] = "30"
         app.tidy(c, now)
         self.assertIsNone(c.execute("SELECT 1 FROM scout WHERE video_id='old00000000'").fetchone())
         self.assertIsNotNone(c.execute("SELECT 1 FROM scout WHERE video_id='kept0000000'").fetchone())   # brought back: kept
@@ -1314,12 +1315,12 @@ class ScoutTests(unittest.TestCase):
 
     def test_facts_survive_restart(self):
         c = app.connect()
-        app.SCOUT_LINK.update(secs=3.1, last=int(time.time()) - 120)
-        app.scout_save(c, "secs", "3.10"); app.scout_save(c, "last", str(app.SCOUT_LINK["last"])); c.commit(); c.close()
-        app.SCOUT_LINK.update(secs=0.0, last=0)                               # a restart forgets them...
+        scout.SCOUT_LINK.update(secs=3.1, last=int(time.time()) - 120)
+        scout.scout_save(c, "secs", "3.10"); scout.scout_save(c, "last", str(scout.SCOUT_LINK["last"])); c.commit(); c.close()
+        scout.SCOUT_LINK.update(secs=0.0, last=0)                               # a restart forgets them...
         app.init_db()                                                         # ...and reads them back
-        self.assertEqual((app.SCOUT_LINK["secs"], app.SCOUT_LINK["last"] > 0), (3.1, True))
-        app.SCOUT_LINK.update(secs=0.0, last=0)
+        self.assertEqual((scout.SCOUT_LINK["secs"], scout.SCOUT_LINK["last"] > 0), (3.1, True))
+        scout.SCOUT_LINK.update(secs=0.0, last=0)
 
     def test_page_routes(self):
         """The Settings > Scout page and what it posts to."""
@@ -1335,7 +1336,7 @@ class ScoutTests(unittest.TestCase):
             self.assertIn(bit, page)
         self.assertIn('<b id="sc-dropped">1</b><span>Dropped today</span>', page)
         self.assertEqual(call("/settings/scout", k="min", v="65")[0], 204)
-        self.assertEqual(app.SCOUT_CFG["min"], "65")
+        self.assertEqual(scout.SCOUT_CFG["min"], "65")
         self.assertEqual(call("/settings/scout", k="min", v="99")[0], 400)
         self.assertEqual(call("/settings/scout", k="days", v="90")[0], 204)
         self.assertEqual(call("/settings/scout", k="days", v="45")[0], 400)
@@ -1345,16 +1346,16 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(call("/scout/channel", op="remove", kind="farm", v="Bad Farm")[0], 200)
         self.assertEqual(call("/scout/voice", op="learn", v="https://youtube.com/shorts/AeyLzuVhr1s")[0], 503)  # not connected
         port, seen = self._fake_scout({})
-        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
-        app.SCOUT_LINK.update(state="ok", voices=[{"name": "tbQTA6u4lEM", "channels": 2, "channel_names": ["Drip Dyl", "Volze"],
+        scout.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port))
+        scout.SCOUT_LINK.update(state="ok", voices=[{"name": "tbQTA6u4lEM", "channels": 2, "channel_names": ["Drip Dyl", "Volze"],
                                                     "learned": "Nov 13"}], version="0.4", up=7200, secs=2.4, last=int(time.time()))
         code, body = call("/scout/voice", op="learn", v="https://youtube.com/shorts/AeyLzuVhr1s?si=x")
         self.assertEqual((code, json.loads(body)), (200, {"ok": True, "msg": "Same voice as tbQTA6u4lEM · 2 channels"}))
         self.assertEqual(call("/scout/voice", op="learn", v="hello")[0], 400)
         self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 200)
         self.assertEqual(seen, ["learn AeyLzuVhr1s", "forget tbQTA6u4lEM"])
-        app.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
-        app.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
+        scout.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
+        scout.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
         page = call("/settings")[1]
         self.assertNotIn("/scout/share?name=", page)                                       # Submissions is off at first:
         self.assertIn("Ready to submit", page)                                              # a ready voice says so
@@ -1397,10 +1398,10 @@ class ScoutTests(unittest.TestCase):
         c.execute("INSERT INTO scout(video_id,score,farm,why,at,deep) VALUES('qd000000000',65,1,'world-rule opening',?,1)",
                   (int(time.time()),))
         c.execute("INSERT INTO scout(video_id,score,farm,why,at,kept) VALUES('kb000000000',50,0,'x',?,1)", (int(time.time()),))
-        app.scout_set_channel(c, "farm", "Bad Farm"); app.scout_set_channel(c, "keep", "Good Guy")
-        app.SCOUT_CFG["min"] = "65"
+        scout.scout_set_channel(c, "farm", "Bad Farm"); scout.scout_set_channel(c, "keep", "Good Guy")
+        scout.SCOUT_CFG["min"] = "65"
         port, seen = self._fake_scout({})
-        app.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port)); app.SCOUT_LINK.update(state="ok")
+        scout.SCOUT_CFG.update(on="1", addr="127.0.0.1", port=str(port)); scout.SCOUT_LINK.update(state="ok")
         srv = app.ThreadingHTTPServer(("127.0.0.1", 0), app.App)
         threading.Thread(target=srv.serve_forever, daemon=True).start()
         self.addCleanup(srv.shutdown)
@@ -1430,15 +1431,15 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual([x["id"] for x in b["brought_back"]], ["kb000000000"])
         self.assertEqual(len(b["voices"][0]["print"]), 512)                       # voiceprints from the plugin
         # start again from nothing, then restore the zip
-        c.execute("DELETE FROM scout_chan"); c.execute("DELETE FROM scout"); app.SCOUT_CFG["min"] = ""
+        c.execute("DELETE FROM scout_chan"); c.execute("DELETE FROM scout"); scout.SCOUT_CFG["min"] = ""
         code, _, out = req("/scout/restore", zipped)
         self.assertEqual((code, json.loads(out)["msg"]), (200, "Restored 2 channels, 1 brought back, 1 voices"))
-        self.assertEqual(app.scout_channels(c), {"bad farm"})
-        self.assertEqual(app.SCOUT_CFG["min"], "65")
+        self.assertEqual(scout.scout_channels(c), {"bad farm"})
+        self.assertEqual(scout.SCOUT_CFG["min"], "65")
         self.assertEqual(c.execute("SELECT kept FROM scout WHERE video_id='kb000000000'").fetchone()[0], 1)
         self.assertEqual(seen, ["restore 1"])
         self.assertEqual(req("/scout/restore", z.read("backup.json"))[0], 200)     # the plain json works too
-        app.SCOUT_LINK.update(state="down")                                        # plugin away: the rest still restores
+        scout.SCOUT_LINK.update(state="down")                                        # plugin away: the rest still restores
         self.assertIn("voices not restored", json.loads(req("/scout/restore", zipped)[2])["msg"])
         self.assertEqual(req("/scout/restore", b'{"hello": 1}')[0], 400)
         self.assertEqual(req("/scout/restore", b"PK not a zip")[0], 400)
@@ -1462,21 +1463,21 @@ class ScoutTests(unittest.TestCase):
         verify = lambda en: {"examples": [{"id": v, "gap": gaps[v]} for v in en["examples"]]}
         farm = {"aaaaaaaaaaa": {"score": 50, "why": ["world-rule opening"]}, "bbbbbbbbbbb": {"score": 30, "why": ["farm description"]}}
         text = lambda vid: farm.get(vid, {"score": 0, "why": []})
-        r = app.scout_review(lambda u: pages[u], verify, text)
+        r = scout.scout_review(lambda u: pages[u], verify, text)
         self.assertEqual(r["error"], "")
         self.assertEqual([(i["number"], i["verdict"]) for i in r["items"]], [(7, "ok"), (8, "no")])
         f = r["items"][0]["files"][0]
         self.assertEqual((f["same"], f["diff"], f["clues"], f["why"]), (2, 0, 2, ["world-rule opening", "farm description"]))
         # same voice but no farm clues: look at the channels; nothing heard: wait
-        self.assertEqual(app.scout_judge_entry(e1, verify, lambda v: {"score": 0})["verdict"], "look")
-        self.assertEqual(app.scout_judge_entry(e1, lambda en: {"examples": []}, text)["verdict"], "wait")
+        self.assertEqual(scout.scout_judge_entry(e1, verify, lambda v: {"score": 0})["verdict"], "look")
+        self.assertEqual(scout.scout_judge_entry(e1, lambda en: {"examples": []}, text)["verdict"], "wait")
         def broken(en):
             raise OSError("plugin off")
-        self.assertEqual(app.scout_judge_entry(e1, broken, text)["verdict"], "wait")
-        app.SCOUT_CFG["review"] = "0"
-        self.assertNotIn('id="sf-subs"', app.scout_pane(app.connect()))                    # off: not for everyone
-        app.SCOUT_CFG["review"] = "1"
-        page = app.scout_pane(app.connect())
+        self.assertEqual(scout.scout_judge_entry(e1, broken, text)["verdict"], "wait")
+        scout.SCOUT_CFG["review"] = "0"
+        self.assertNotIn('id="sf-subs"', scout.scout_pane(app.connect()))                    # off: not for everyone
+        scout.SCOUT_CFG["review"] = "1"
+        page = scout.scout_pane(app.connect())
         self.assertIn('id="sf-subs"', page)
         self.assertIn("✅ Looks good to merge", page)
         self.assertIn("❌ Don&#x27;t merge" if "&#x27;" in page else "❌ Don't merge", page)
@@ -1484,31 +1485,31 @@ class ScoutTests(unittest.TestCase):
         self.assertIn("voice 2/2 same · farm clues 2/2 (world-rule opening, farm description)", page)
         def down(u):
             raise OSError("rate limited")
-        self.assertIn("rate limited", app.scout_review(down)["error"])
+        self.assertIn("rate limited", scout.scout_review(down)["error"])
         # opening the page later: GitHub says which are still open. #7 was merged (gone), #8 changed (not checked
         # yet), #9 is new (not checked yet)
-        app.scout_review(lambda u: pages[u], verify, text)
-        app.SCOUT_REVIEW["synced"] = 0
+        scout.scout_review(lambda u: pages[u], verify, text)
+        scout.SCOUT_REVIEW["synced"] = 0
         open_now = [{"number": 8, "title": "Add farm-0004", "html_url": "https://gh/8", "head": {"sha": "new"}},
                     {"number": 9, "title": "Add farm-0005", "html_url": "https://gh/9", "head": {"sha": "s9"}}]
-        app.scout_sync_open(lambda u: open_now)
-        self.assertEqual([(i["number"], i["verdict"]) for i in app.SCOUT_REVIEW["items"]], [(8, "unchecked"), (9, "unchecked")])
-        app.SCOUT_REVIEW["synced"] = int(time.time())
-        self.assertIn("Not checked yet: press Check", app.scout_pane(app.connect()))
-        app.scout_sync_open(lambda u: [])                             # within a minute: GitHub isn't asked again
-        self.assertEqual(len(app.SCOUT_REVIEW["items"]), 2)
-        app.SCOUT_REVIEW["synced"] = 0
-        app.scout_sync_open(lambda u: [])                             # all merged or closed
-        self.assertEqual(app.SCOUT_REVIEW["items"], [])
-        self.assertIn("None open.", app.scout_pane(app.connect()))
-        app.SCOUT_REVIEW.update(synced=0, items=[{"number": 8, "title": "t", "url": "u", "user": "", "files": [],
+        scout.scout_sync_open(lambda u: open_now)
+        self.assertEqual([(i["number"], i["verdict"]) for i in scout.SCOUT_REVIEW["items"]], [(8, "unchecked"), (9, "unchecked")])
+        scout.SCOUT_REVIEW["synced"] = int(time.time())
+        self.assertIn("Not checked yet: press Check", scout.scout_pane(app.connect()))
+        scout.scout_sync_open(lambda u: [])                             # within a minute: GitHub isn't asked again
+        self.assertEqual(len(scout.SCOUT_REVIEW["items"]), 2)
+        scout.SCOUT_REVIEW["synced"] = 0
+        scout.scout_sync_open(lambda u: [])                             # all merged or closed
+        self.assertEqual(scout.SCOUT_REVIEW["items"], [])
+        self.assertIn("None open.", scout.scout_pane(app.connect()))
+        scout.SCOUT_REVIEW.update(synced=0, items=[{"number": 8, "title": "t", "url": "u", "user": "", "files": [],
                                                   "verdict": "ok", "sha": "x"}])
         def offline(u):
             raise OSError("offline")
-        app.scout_sync_open(offline)                                  # GitHub away: keep the list, never "None open"
-        self.assertEqual(len(app.SCOUT_REVIEW["items"]), 1)
-        self.assertNotIn("None open.", app.scout_pane(app.connect()))
-        app.SCOUT_REVIEW.update(at=0, error="", items=[], synced=0, sync_ok=False)
+        scout.scout_sync_open(offline)                                  # GitHub away: keep the list, never "None open"
+        self.assertEqual(len(scout.SCOUT_REVIEW["items"]), 1)
+        self.assertNotIn("None open.", scout.scout_pane(app.connect()))
+        scout.SCOUT_REVIEW.update(at=0, error="", items=[], synced=0, sync_ok=False)
 
     def test_channel_memory_and_off_switch(self):
         c = app.connect()
@@ -1516,16 +1517,16 @@ class ScoutTests(unittest.TestCase):
             c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES(?,?,?,1)", (f"bad0000000{i}", "t", "Farm"))
             c.execute("INSERT INTO scout(video_id,score,farm,why,at) VALUES(?,90,1,'x',0)", (f"bad0000000{i}",))
         c.execute("INSERT INTO videos(id,title,channel_title,short) VALUES('bad00000009','t','Farm',1)")
-        self.assertEqual(app.scout_channels(c), {"farm"})
+        self.assertEqual(scout.scout_channels(c), {"farm"})
         calls = []
         self._wire({}, calls)
-        app.SCOUT_CFG["text"] = "1"
+        scout.SCOUT_CFG["text"] = "1"
         app.OUTSIDE[:] = ["bad00000009"]
-        app.scout_outside(c)
+        scout.scout_outside(c)
         self.assertEqual((app.OUTSIDE, calls), ([], []))                  # dropped without asking YouTube
-        app.SCOUT_CFG["text"] = "0"
+        scout.SCOUT_CFG["text"] = "0"
         app.OUTSIDE[:] = ["bad00000000", "zzz00000000"]
-        app.scout_outside(c)
+        scout.scout_outside(c)
         self.assertEqual((app.OUTSIDE, calls), (["zzz00000000"], []))    # off: nothing new is read; what was already
         self.assertIsNone(c.execute("SELECT 1 FROM scout WHERE video_id='zzz00000000'").fetchone())   # decided stands
         c.close()

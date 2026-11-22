@@ -1,6 +1,6 @@
 # Works on a Synology NAS (Container Manager > Project) or any Docker host.
-# No build step: the standard Python image runs app.py straight from this folder,
-# so updating YakTube = replace app.py, then Restart.
+# No build step: the standard Python image runs app.py (and scout.py) straight from this folder,
+# so updating YakTube = replace app.py and scout.py, then Restart.
 services:
   yaktube:
     image: python:3.12-alpine
@@ -13,6 +13,7 @@ services:
       - "8080:8080"             # change the left number if 8080 is taken, e.g. "8484:8080"
     volumes:
       - ./app.py:/app/app.py:ro # the program (read-only)
+      - ./scout.py:/app/scout.py:ro # Scout, which keeps content-farm Shorts out
       - ./data:/data            # yaktube.db (profiles, subscriptions, history) lives in ./data
     user: "0:0"                 # lets it write to NAS folders regardless of Synology permissions
     healthcheck:

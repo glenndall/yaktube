@@ -28,10 +28,12 @@
 YakTube can be hosted in several ways:
 
 - **Mac:** double-click `start.command` (first time: right-click → Open), or run `python3 app.py`.
-- **Synology NAS (Docker):** copy `app.py` and `docker-compose.yml` into a NAS folder, then Container Manager →
-  Project → Create → pick the folder → it finds `docker-compose.yml` → Next → Done. Data is saved in the folder's
-  `data/yaktube.db` (include it in Hyper Backup). **To update:** replace `app.py`, then Project → yaktube → Restart.
-  No rebuild needed.
+- **Synology NAS (Docker):** copy `app.py`, `scout.py` and `docker-compose.yml` into a NAS folder, then Container
+  Manager → Project → Create → pick the folder → it finds `docker-compose.yml` → Next → Done. Data is saved in the
+  folder's `data/yaktube.db` (include it in Hyper Backup). **To update:** replace `app.py` and `scout.py`, then
+  Project → yaktube → Restart. No rebuild needed.
+- **Scout is optional:** it lives in `scout.py`, next to `app.py`. Without that file YakTube runs as usual, just with
+  no Scout in Settings.
 - **Ubuntu (Docker):** `docker compose up -d` (no build step).
 - **Ubuntu (standalone):** `python3 app.py` (Python 3.9+, no additional packages).
 
