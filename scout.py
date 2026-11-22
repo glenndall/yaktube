@@ -686,7 +686,7 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
   else if(b.hasAttribute("data-review")){var rm2=b.nextElementSibling;b.disabled=true;rm2.className="msg";
     rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
     .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}
-      if(!j.n){b.disabled=false;rm2.textContent="None open.";return}now()})
+      now()})
     .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}
   else if(b.dataset.forget){var d2=b.closest("details");b.disabled=true;post("/scout/voice","op=forget&v="+encodeURIComponent(b.dataset.forget))
     .then(function(r){if(r.ok){b.closest(".item").remove();count(d2)}else b.disabled=false})}});
