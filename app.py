@@ -5,7 +5,7 @@ One file, Python standard library only. Data lives in SQLite.
 Subscriptions come from YouTube's public RSS feeds; playback uses the
 privacy-enhanced embedded player. No Google account, no API key.
 """
-import base64, csv, functools, html, io, json, math, os, random, re, sqlite3, struct, sys, threading, time, urllib.parse, urllib.request, zipfile, zlib
+import base64, csv, functools, gzip, html, io, json, math, os, random, re, sqlite3, struct, sys, threading, time, urllib.parse, urllib.request, zipfile, zlib
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
@@ -2820,7 +2820,12 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
         return "".join(f'<a href="{h}" class="{"on" if tab == k else ""}">{ICON[k] if icons else ""}<span>{n}</span></a>'
                        for k, h, n in tabs)
     av = f'<span class="av" style="background:{prof["color"]}">{face(prof)}</span>'
+    # The phone's bottom bar comes first in <body>, ahead of the header and the page. It's position:fixed, so where it
+    # sits in the HTML doesn't change how it looks, but it changes when it arrives: an iPhone draws the first part of
+    # a page straight away, and over the VPN the rest comes a round trip or more later. Last in <body>, the bar showed
+    # up after everything else, so it flashed on every tap. Keep it here (test_23_bottom_bar_first checks).
     return head + (
+        f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         f'<header><button type="button" class="burger" title="Collapse or expand the menu" aria-label="Menu">'
         f'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg></button>'
         + logo("a", ' href="/" aria-label="YakTube"') +
@@ -2832,7 +2837,6 @@ def layout(title, body, prof=None, tab="", q="", bare=False):
         f'{face(prof)}</a>{THEME_BTN}</header>'
         f'<div class="shell"><nav class="side">{links(MAIN_TABS)}<hr>{links(MORE_TABS)}<hr>'   # light or dark: in Settings (a phone keeps its header button)
         f'{links((("set", "/settings", "Settings"),))}</nav><main>{body}</main></div>'
-        f'<nav class="bot">{links(MAIN_TABS)}</nav>'
         f'<nav class="tvside"><a class="me" href="/profiles">{av}<span>{e(prof["name"])}<small>Switch profile</small></span></a>'
         f'{links(TV_TABS)}<hr>{links(TV_MORE)}<!--tvrecent--><i class="gap"></i>{links((("set", "/settings", "Settings"),))}</nav>'
         + PAGE_JS + '</body></html>')
@@ -2843,6 +2847,17 @@ class App(BaseHTTPRequestHandler):
     server_version = "YakTube/1"
 
     # -- helpers
+    # Text that's sent gzipped to a browser that takes it: pages, CSS, scripts, JSON. Not pictures, the TV app's download,
+    # files saved with Content-Disposition, or part of a file (Range).
+    ZIP_TYPES = ("text/", "application/json", "application/manifest+json", "application/javascript")
+
+    def takes_gzip(self):
+        for part in self.headers.get("Accept-Encoding", "").lower().split(","):
+            name, _, q = part.partition(";")
+            if name.strip() == "gzip":
+                return not re.fullmatch(r"\s*q\s*=\s*0(\.0*)?\s*", q)
+        return False
+
     def send(self, body, status=200, ctype="text/html; charset=utf-8", headers=()):
         if isinstance(body, str) and ctype.startswith("text/html") and self.tv():
             body = body.replace("</head>", TV_CSS + "</head>", 1)
@@ -2850,6 +2865,12 @@ class App(BaseHTTPRequestHandler):
                 body = body.replace("<!--tvrecent-->", self.tv_recent(), 1).replace("</body>", TV_JS + TV_MENU_JS + "</body>", 1)
             body = body.replace("</body>", TV_NAV_JS + "</body>", 1)
         data = body.encode() if isinstance(body, str) else body
+        if ctype.startswith(self.ZIP_TYPES) and status != 206 and not any(k in ("Content-Range", "Content-Disposition")
+                                                                          for k, _ in headers):
+            headers = [*headers, ("Vary", "Accept-Encoding")]
+            if len(data) > 1024 and self.takes_gzip():           # a page shrinks to a quarter or less (Home: 120 KB
+                data = gzip.compress(data, compresslevel=6, mtime=0)   # to 25 KB), so over the VPN it's all there sooner
+                headers.append(("Content-Encoding", "gzip"))
         self.send_response(status)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))

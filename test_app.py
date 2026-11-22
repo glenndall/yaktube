@@ -987,6 +987,63 @@ class T(unittest.TestCase):
         self.assertIn("No searches remembered.", page)
         db.close()
 
+    def test_23_bottom_bar_first(self):
+        """The phone's bottom bar is the first thing in <body>, ahead of the header and the page: over the VPN the end
+        of a page comes a round trip later, and a bar sent last flashed on every tap."""
+        a = self.login("Barry")
+        self.get(a, "/subs/add", {"url": "@woz"})
+        for path in ("/", "/feed", "/subs", "/history", "/later", "/settings", "/watch?v=vid00000001", "/nope"):
+            page = self.get(a, path)[2] if path != "/nope" else self.fails(a, path)
+            body = page[page.index("<body"):]
+            self.assertTrue(body[body.index(">") + 1:].startswith('<nav class="bot">'), path)
+            self.assertEqual(page.count('<nav class="bot">'), 1, path)
+            self.assertLess(page.index('<nav class="bot">'), page.index("<header>"), path)
+            self.assertLess(page.index('<nav class="bot">'), page.index("<main>"), path)
+            bar = page[page.index('<nav class="bot">'):]
+            self.assertEqual(bar[:bar.index("</nav>")].count("<a "), len(app.MAIN_TABS), path)   # Home, Shorts, Subscriptions
+
+    def fails(self, op, path):
+        try:
+            op.open(self.base + path)
+        except urllib.error.HTTPError as ex:
+            return ex.read().decode()
+
+    def test_24_gzip(self):
+        """Pages come gzipped to a browser that asks (an iPhone always does), smaller and reading the same; icons, small
+        answers, downloads and anything that doesn't ask get them as before."""
+        import gzip
+        a = self.login("Zippy")
+        self.get(a, "/subs/add", {"url": "@woz"})
+        def raw(path, enc="gzip, deflate, br", ua=None):
+            h = {"Accept-Encoding": enc} if enc else {}
+            if ua:
+                h["User-Agent"] = ua
+            r = a.open(urllib.request.Request(self.base + path, headers=h))
+            return r.headers, r.read()
+        for path in ("/feed", "/subs", "/later", "/settings"):
+            plain = self.get(a, path)[2]                                  # urllib asks for no compression
+            h, data = raw(path)
+            self.assertEqual(h["Content-Encoding"], "gzip", path)
+            self.assertEqual(h["Vary"], "Accept-Encoding", path)
+            self.assertEqual(int(h["Content-Length"]), len(data), path)   # the size sent, not the page's
+            self.assertEqual(gzip.decompress(data).decode(), plain, path)
+            self.assertLess(len(data), len(plain.encode()) / 3, path)
+        h, data = raw("/feed", enc=None)                                  # didn't ask: as before
+        self.assertIsNone(h["Content-Encoding"])
+        self.assertIn('<nav class="bot">', data.decode())
+        self.assertIsNone(raw("/feed", enc="gzip;q=0, identity")[0]["Content-Encoding"])   # said no to it
+        self.assertEqual(raw("/feed", enc="deflate, GZip")[0]["Content-Encoding"], "gzip")
+        self.assertIsNone(raw("/favicon.png")[0]["Content-Encoding"])     # pictures are compressed already
+        h, data = raw("/healthz")                                         # too small to bother
+        self.assertIsNone(h["Content-Encoding"])
+        self.assertEqual(data, b"ok")
+        h, _ = raw("/subs/export")                                        # a file to save
+        self.assertIsNone(h["Content-Encoding"])
+        self.assertIn("attachment", h["Content-Disposition"])
+        h, data = raw("/feed", ua="Mozilla/5.0 YakTubeTV/1")              # the TV's extras go in before it's zipped
+        self.assertEqual(h["Content-Encoding"], "gzip")
+        self.assertIn("window.__yak", gzip.decompress(data).decode())
+
 class ScoutTests(unittest.TestCase):
     """Scout: spotting content-farm Shorts from what they say about themselves (YouTube mocked)."""
     STORY = ("In this world, everyone lives in tiny cabins on one giant wall underground, and nobody knows what's on the "
