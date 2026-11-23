@@ -3054,13 +3054,10 @@ class App(BaseHTTPRequestHandler, scout.Routes if scout else object):
             "".join(f'<div class="shid">{chan_av(r["ref"], r["title"] or "?")}<span class="nm">{e(r["title"])}</span>'
                     f'<button type="button" class="btn ghost small" data-c="{e(r["ref"])}">Recommend again</button></div>' for r in hid))
         n = self.db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (pid,)).fetchone()[0]
-        add("watch", "Clear watch history",
-            f"Removes {name}'s {n} watched video{'s' if n != 1 else ''}." if n else f"{name}'s History is empty.",
-            ask("watch", "Clear watch history") if n else "")
-        n = self.db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=? AND auto=0", (pid,)).fetchone()[0]
-        add("search", "Clear search history",
-            f"Removes {name}'s {n} search{'es' if n != 1 else ''}." if n else "No searches remembered.",
-            ask("search", "Clear search history") if n else "")
+        m = self.db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=? AND auto=0", (pid,)).fetchone()[0]
+        add("clear", "Clear History",
+            f"Removes {name}'s {n} watched video{'s' if n != 1 else ''} and {m} search{'es' if m != 1 else ''}." if n or m
+            else f"{name}'s History is empty.", ask("all", "Clear History") if n or m else "")
         if scout:
             rows.append('<h4>Plugins</h4><button type="button" class="srow" data-p="scout" id="r-scout">Scout</button>')
             panes.append(scout.scout_pane(self.db))
@@ -3090,11 +3087,11 @@ class App(BaseHTTPRequestHandler, scout.Routes if scout else object):
 
     def settings_clear(self):
         what, pid = self.form().get("what", ""), self.prof["id"]
-        if what == "watch":
+        if what in ("all", "watch"):
             self.db.execute("DELETE FROM history WHERE profile_id=?", (pid,))
-        elif what == "search":     # YakTube's own topic searches too: they come back from what's watched next
+        if what in ("all", "search"):     # YakTube's own topic searches too: they come back from what's watched next
             self.db.execute("DELETE FROM searches WHERE profile_id=?", (pid,))
-        self.redirect("/settings#" + (what if what in ("watch", "search") else ""))
+        self.redirect("/settings#" + {"all": "clear", "watch": "watch", "search": "search"}.get(what, ""))
 
     def history_clear(self):
         self.db.execute("DELETE FROM history WHERE profile_id=?", (self.prof["id"],))

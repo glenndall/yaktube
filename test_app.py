@@ -914,7 +914,7 @@ class T(unittest.TestCase):
         post = lambda path, body: op.open(self.base + path, body.encode())
         page = self.get(op, "/settings")[2]
         self.assertIn('href="/settings"', page)                                        # in the side panel
-        for k in ("lang", "loc", "hidden", "watch", "search"):
+        for k in ("lang", "loc", "hidden", "clear"):
             self.assertIn(f'data-p="{k}"', page)
         self.assertNotIn('data-p="addr"', page)                                        # this-TV settings only on a TV
         for h in ("Language &amp; Location", "History &amp; Data", "About"):   # grouped like YouTube's
@@ -968,13 +968,13 @@ class T(unittest.TestCase):
         self.play(op, "vid00000001")
         db.execute("INSERT INTO searches(profile_id,q,at) VALUES(?,?,1)", (pid, "retro games"))
         page = self.get(op, "/settings")[2]
-        self.assertIn("Removes Seth's 1 watched video.", page)                     # one short line each
-        self.assertIn("Removes Seth's 1 search.", page)
+        self.assertIn("Removes Seth's 1 watched video and 1 search.", page)        # one row, one short line
+        self.assertNotIn("Clear watch history", page)
+        self.assertNotIn("Clear search history", page)
         self.assertIn("This can't be undone", page)                                # Clear asks first
-        _, url, _ = self.get(op, "/settings/clear", {"what": "watch"})
-        self.assertTrue(url.endswith("/settings#watch"))                              # back to that setting
+        _, url, _ = self.get(op, "/settings/clear", {"what": "all"})
+        self.assertTrue(url.endswith("/settings#clear"))                              # back to that setting
         self.assertEqual(db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (pid,)).fetchone()[0], 0)
-        self.get(op, "/settings/clear", {"what": "search"})
         self.assertEqual(db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=?", (pid,)).fetchone()[0], 0)
         page = self.get(op, "/settings")[2]
         self.assertIn("Seth's History is empty.", page)
@@ -985,7 +985,6 @@ class T(unittest.TestCase):
         self.assertIn("Clear all 1 video from History? This can't be undone.", hist)
         self.assertIn('action="/history/remove" data-sure="Remove"', hist)
         self.assertIn('f.dataset.sure', hist)
-        self.assertIn("No searches remembered.", page)
         db.close()
 
     def test_23_bottom_bar_first(self):
