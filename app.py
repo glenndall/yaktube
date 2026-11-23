@@ -1235,6 +1235,7 @@ h1{font-size:22px;margin:0 0 18px;letter-spacing:-.3px}
 form.sure button,form.sure button:focus{background:#c92a2a!important;color:#fff!important;box-shadow:none!important}
 @media(max-width:720px){.sets{grid-template-columns:minmax(0,1fr)}.sets>*{min-width:0}.slist{border:0;padding:0}.spane{padding-top:16px}.scp .stats{gap:8px}.scp .stat{padding:10px 12px;min-width:0}.scp .stat b{font-size:21px}.scp .stat span{font-size:12px}}
 /* Settings > Scout: a wider page than the others, left-aligned, in sections */
+.sclr{margin:0 0 28px}.sclr p{margin:0 0 12px}
 .spane.scp{align-items:stretch;text-align:left;max-width:640px;width:100%;margin:0 auto;padding-top:28px}   /* centred like the others */
 .scp .sch{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}.scp .sch h2{margin:0}
 .spane.scp>p{align-self:center;text-align:center}
@@ -3055,9 +3056,11 @@ class App(BaseHTTPRequestHandler, scout.Routes if scout else object):
                     f'<button type="button" class="btn ghost small" data-c="{e(r["ref"])}">Recommend again</button></div>' for r in hid))
         n = self.db.execute("SELECT COUNT(*) FROM history WHERE profile_id=?", (pid,)).fetchone()[0]
         m = self.db.execute("SELECT COUNT(*) FROM searches WHERE profile_id=? AND auto=0", (pid,)).fetchone()[0]
-        add("clear", "Clear History",
-            f"Removes {name}'s {n} watched video{'s' if n != 1 else ''} and {m} search{'es' if m != 1 else ''}." if n or m
-            else f"{name}'s History is empty.", ask("all", "Clear History") if n or m else "")
+        def part(what, count, line, none, label):      # one half of Clear History: its own line and its own button
+            return (f'<div class="sclr"><p>{line}</p>{ask(what, label)}</div>' if count else f'<div class="sclr"><p>{none}</p></div>')
+        add("clear", "Clear History", "",
+            part("watch", n, f"Removes {name}'s {n} watched video{'s' if n != 1 else ''}.", "No watched videos.", "Clear watch history")
+            + part("search", m, f"Removes {name}'s {m} search{'es' if m != 1 else ''}.", "No searches remembered.", "Clear search history"))
         if scout:
             rows.append('<h4>Plugins</h4><button type="button" class="srow" data-p="scout" id="r-scout">Scout</button>')
             panes.append(scout.scout_pane(self.db))
@@ -3091,7 +3094,7 @@ class App(BaseHTTPRequestHandler, scout.Routes if scout else object):
             self.db.execute("DELETE FROM history WHERE profile_id=?", (pid,))
         if what in ("all", "search"):     # YakTube's own topic searches too: they come back from what's watched next
             self.db.execute("DELETE FROM searches WHERE profile_id=?", (pid,))
-        self.redirect("/settings#" + {"all": "clear", "watch": "watch", "search": "search"}.get(what, ""))
+        self.redirect("/settings#" + "clear" if what in ("all", "watch", "search") else "")
 
     def history_clear(self):
         self.db.execute("DELETE FROM history WHERE profile_id=?", (self.prof["id"],))
