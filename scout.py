@@ -556,6 +556,7 @@ def scout_pane(c):
         names = [str(x) for x in v.get("channel_names", [])][:6] if isinstance(v.get("channel_names"), list) else []
         bits = [f'{n} channel{"s" if n != 1 else ""}' + (": " + ", ".join(names) if names else "")] if n else []
         return " · ".join(bits + ([f'learned {v["learned"]}'] if v.get("learned") else []))
+    listed = {str(c).lower() for v in voices if v.get("source") == "shared" for c in v.get("channel_names", [])}
     def vbtn(v):
         n = yak.e(str(v.get("name", "")))
         q = urllib.parse.quote(str(v.get("name", "")))
@@ -567,6 +568,8 @@ def scout_pane(c):
                     if k > 0]                               # red: the first thing missing (a channel brings a Short); green: ready
             if more:
                 share = f'<span class="tag need" title="The shared list needs 2 channels and 2 Shorts">Needs {more[0]}</span>'
+            elif v.get("channel_names") and all(str(c).lower() in listed for c in v["channel_names"]):
+                share = '<span class="tag">Submitted</span>'      # its channels are all on the shared list already
             else:
                 share = ('<span class="tag ready" title="Turn on Advanced &gt; Submissions to share it">Ready to submit</span>'
                          if SCOUT_CFG["review"] != "1" else '<span class="tag ready">Ready to submit</span>'

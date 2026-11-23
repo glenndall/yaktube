@@ -1368,6 +1368,11 @@ class ScoutTests(unittest.TestCase):
         self.assertIn('href="/scout/share?name=tbQTA6u4lEM"', page)                       # Share: learned voices only
         self.assertNotIn('href="/scout/share?name=farm-0002"', page)
         self.assertIn("Shared list: 2 voices · updated 2 hours ago", page)
+        scout.SCOUT_LINK["voices"].append({"name": "sent1", "channels": 2, "channel_names": ["a", "B"], "learned": "Nov 14"})
+        page = call("/settings")[1]                                                         # all its channels are on the list:
+        self.assertIn('<span class="tag">Submitted</span>', page)                           # so it says so, with no Share
+        self.assertNotIn('href="/scout/share?name=sent1"', page)
+        scout.SCOUT_LINK["voices"].pop()
         code, body = call("/scout/share?name=tbQTA6u4lEM")
         self.assertEqual((code, json.loads(body)["id"]), (200, "tbqta6u4lem"))
         import http.client
