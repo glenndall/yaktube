@@ -47,6 +47,7 @@ the defaults.
 | `YAK_REFRESH_MIN` | `30` | Minutes between checks for new videos from your subscriptions |
 | `YAK_DISCOVER_HOURS` | `6` | Hours between look-arounds for new Home / New to you suggestions (`0` = off) |
 | `YAK_SCOUT` | `1` | `0` starts with Scout's title & caption check off (Settings → Scout switches it any time) |
+| `YAK_SCOUT_MAINTAINER` | unset | `1` shows Settings → Scout → Submissions, for whoever merges the shared voice list |
 | `YAK_SCOUT_MIN` | `50` | How sure Scout must be (0-100) before it drops a Short; lower drops more, higher drops fewer |
 | `YAK_DB` | `./yaktube.db` | Where the database lives (Docker: `/data/yaktube.db`, already set) |
 | `YAK_PORT` | `8080` | Port to listen on (not for Docker, see below) |
@@ -186,9 +187,10 @@ the defaults.
 - **Never drop:** channels whose Shorts are always kept, whatever they score. Adding one brings its dropped Shorts back.
 - **Voices:** the plugin's learned farm voices and the channels each was heard on. A voice on 2 or more channels drops
   a Short by itself (50 points); one from a single channel needs one more clue (35). Paste a farm Short's link and
-  **Learn**; **×** forgets one. Shown while the plugin is connected. **Share** on one you learned downloads it and
-  opens the shared list's *Submit a farm voice* form, filled in: drag the file in and press Create.
-- **Submissions:** the open pull requests on the shared voice list. **Check** listens to each one's example Shorts
+  **Learn**. Voices stay: nothing forgets or hides one. Shown while the plugin is connected. **Share** on one you
+  learned opens the shared list's *Submit a farm voice* form, filled in; a voice whose channels are all on the list says
+  **Submitted**.
+- **Submissions (the list's maintainer only: set `YAK_SCOUT_MAINTAINER=1`):** the open pull requests on the shared voice list. **Check** listens to each one's example Shorts
   with the plugin (same voice?) and reads them with the titles & captions check (farm clues?), here at home, since
   YouTube blocks GitHub's servers. Each gets one verdict: ✅ looks good to merge, ⚠️ same voice but few farm clues
   (look at the channels), ❌ don't merge, or ⏸ couldn't check yet. **Open** takes you to the pull request to merge it.

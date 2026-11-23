@@ -1352,16 +1352,17 @@ class ScoutTests(unittest.TestCase):
         code, body = call("/scout/voice", op="learn", v="https://youtube.com/shorts/AeyLzuVhr1s?si=x")
         self.assertEqual((code, json.loads(body)), (200, {"ok": True, "msg": "Same voice as tbQTA6u4lEM · 2 channels"}))
         self.assertEqual(call("/scout/voice", op="learn", v="hello")[0], 400)
-        self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 200)
-        self.assertEqual(seen, ["learn AeyLzuVhr1s", "forget tbQTA6u4lEM"])
+        self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 400)           # voices stay: no forgetting
+        self.assertEqual(seen, ["learn AeyLzuVhr1s"])
         scout.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
         scout.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
         page = call("/settings")[1]
-        self.assertNotIn("/scout/share?name=", page)                                       # Submissions is off at first:
-        self.assertIn("Ready to submit", page)                                              # a ready voice says so
-        self.assertNotIn('id="sf-subs"', page)
-        self.assertEqual(call("/settings/scout", k="review", v="1")[0] // 100, 2)
-        page = call("/settings")[1]
+        self.assertIn("Ready to submit", page)                                              # a ready voice says so, and anyone
+        self.assertIn('href="/scout/share?name=tbQTA6u4lEM"', page)                       # can share it...
+        self.assertNotIn('id="sf-subs"', page)                                              # but only the maintainer sees Submissions
+        self.assertNotIn("data-forget", page)                                               # and no voice has a × (they stay)
+        self.assertNotIn('data-k="review"', page)                                           # nor a switch for it
+        self.assertEqual(call("/settings/scout", k="review", v="1")[0], 400)
         self.assertIn("2 channels: Drip Dyl, Volze", page)
         self.assertIn('<span class="tag">Learned</span>', page)
         self.assertIn('<span class="tag">Shared</span>', page)

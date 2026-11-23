@@ -21,10 +21,15 @@ SCOUT_CFG = {"text": "1" if SCOUT else "0",                     # Settings > Sco
              "on": "0", "addr": "", "port": "8095",             #   the Scout plugin: on/off, where it is
              "seen": "0",                                       #   and when it last answered
              "min": "", "days": "60",                           # Advanced: drop at (blank: SCOUT_MIN), remember for,
-             "review": "0",                                     #   Submissions: Share on ready voices, the open list
+             "review": "0",                                     #   the maintainer's Submissions section (no switch in Settings)
              "secs": "0", "last": "0"}                          # seconds a Short, last scan (kept over restarts)
+MAINTAINER = os.environ.get("YAK_SCOUT_MAINTAINER") == "1"      # whoever merges the shared voice list sees Submissions
 SCOUT_MIN = int(os.environ.get("YAK_SCOUT_MIN", "50"))          # score (0-100) at which a Short counts as a farm's
 SCOUT_PER_RUN = 80                                              # Shorts judged per batch (the rest wait for the next)
+
+
+def maintainer():
+    return MAINTAINER or SCOUT_CFG["review"] == "1"             # (the setting is for a portal that was set up before the variable)
 
 
 def scout_min():
@@ -558,7 +563,6 @@ def scout_pane(c):
         return " · ".join(bits + ([f'learned {v["learned"]}'] if v.get("learned") else []))
     listed = {str(c).lower() for v in voices if v.get("source") == "shared" for c in v.get("channel_names", [])}
     def vbtn(v):
-        n = yak.e(str(v.get("name", "")))
         q = urllib.parse.quote(str(v.get("name", "")))
         share = ""
         if v.get("source") != "shared":                   # the shared list wants 2+ channels and 2+ Shorts: shown always
@@ -571,12 +575,10 @@ def scout_pane(c):
             elif v.get("channel_names") and all(str(c).lower() in listed for c in v["channel_names"]):
                 share = '<span class="tag">Submitted</span>'      # its channels are all on the shared list already
             else:
-                share = ('<span class="tag ready" title="Turn on Advanced &gt; Submissions to share it">Ready to submit</span>'
-                         if SCOUT_CFG["review"] != "1" else '<span class="tag ready">Ready to submit</span>'
+                share = ('<span class="tag ready">Ready to submit</span>'
                          f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
                          'title="Send it to the shared voice list">Share</a>')
-        return share + (f'<button type="button" class="x" data-forget="{n}" aria-label="'
-                        f'{"Hide here" if v.get("source") == "shared" else "Forget"}">×</button>')
+        return share
     vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', yak.e(str(v.get("name", "?"))),
                          f'<span class="tag">{"Shared" if v.get("source") == "shared" else "Learned"}</span>{yak.e(vsub(v))}',
                          vbtn(v)) for v in voices)
@@ -584,8 +586,8 @@ def scout_pane(c):
     vinfo = "".join(f'<div class="empty">Shared list: {l.get("count", 0)} voices · '
                     f'{"updated " + yak.ago(l["fetched"]) if l.get("fetched") else "not downloaded yet"}'
                     f'{" · " + yak.e(str(l["error"])[:60]) if l.get("error") else ""}</div>' for l in lists)
-    # submissions to the shared voice list, checked at home (only for the list's maintainer: Advanced > Review)
-    if SCOUT_CFG["review"] == "1":
+    # submissions to the shared voice list, checked at home (only for the list's maintainer)
+    if maintainer():
         scout_sync_open()
 
     def sline(f):
@@ -638,7 +640,7 @@ def scout_pane(c):
             (fold("subs", "Submissions", len(SCOUT_REVIEW["items"]),
                   subs or ('<div class="empty">None open.</div>' if SCOUT_REVIEW["sync_ok"] else ""),
                   '<div class="tools"><button type="button" class="btn small" data-review>Check</button>'
-                  '<span class="msg" role="status"></span></div>' + sinfo) if SCOUT_CFG["review"] == "1" else "") +
+                  '<span class="msg" role="status"></span></div>' + sinfo) if maintainer() else "") +
             fold("log", "Log", len(log), logs or none,
                  '<div class="tools"><input type="search" placeholder="Search" data-filter="log" aria-label="Search">'
                  '<a class="btn ghost small" href="/scout/log.csv" download>Download CSV</a></div>') +
@@ -648,7 +650,7 @@ def scout_pane(c):
             '<div class="chk"><div>Remember for<small>Then Scout looks again</small></div><select class="btn ghost small" '
             'data-set="days" aria-label="Remember for">' + "".join(
                 f'<option value="{d}"{" selected" if d == days else ""}>{d} days</option>' for d in ("30", "60", "90")) +
-            '</select></div>' + switch("review", "Submissions", "Share voices, check the list") +
+            '</select></div>' +
             '<div class="chk"><div>Backup<small>Lists, voices, settings &amp; log (.zip)</small></div>'
             '<a class="btn ghost small" href="/scout/backup" download>Download</a></div>'
             '<div class="chk"><div>Restore<small>From a backup; adds to what\'s here</small><span class="msg" id="sc-rmsg" '
@@ -680,8 +682,7 @@ p.addEventListener("change",function(ev){var k=ev.target.dataset.set;if(k)post("
 p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]");if(a){window.open(a.dataset.submit,"_blank","noopener")}
   var b=ev.target.closest("button");if(!b)return;
   if(b.dataset.k){var on=!b.classList.contains("on");b.classList.toggle("on",on);b.setAttribute("aria-checked",on);
-    b.firstChild.nodeValue=on?"On":"Off";var sv=post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again();
-    if(b.dataset.k=="review")sv.then(subs)}
+    b.firstChild.nodeValue=on?"On":"Off";post("/settings/scout","k="+b.dataset.k+"&v="+(on?1:0));if(b.dataset.k=="on")again()}
   else if(b.dataset.keep){post("/scout/keep","v="+b.dataset.keep);var s=document.createElement("span");s.className="sdone";
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
@@ -690,9 +691,7 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
     rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
     .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}
       subs()})
-    .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}
-  else if(b.dataset.forget){var d2=b.closest("details");b.disabled=true;post("/scout/voice","op=forget&v="+encodeURIComponent(b.dataset.forget))
-    .then(function(r){if(r.ok){b.closest(".item").remove();count(d2)}else b.disabled=false})}});
+    .catch(function(){b.disabled=false;rm2.className="msg bad";rm2.textContent="Couldn't check"})}});
 p.addEventListener("submit",function(ev){var f=ev.target,kind=f.dataset.add;if(!kind)return;ev.preventDefault();
   var v=f.v.value.trim(),m=f.querySelector(".msg");if(!v)return;m.className="msg";
   if(kind=="voice"){m.textContent="Listening…";f.querySelector("button").disabled=true;
@@ -737,9 +736,6 @@ class Routes:
         """Settings > Scout: the two switches, and where the Scout plugin is (an address, or address:port)."""
         f = self.form()
         k, v = f.get("k", ""), f.get("v", "").strip()
-        if k == "review" and v in ("0", "1"):              # only what Settings shows: no need to reconnect
-            scout_save(self.db, k, v)
-            return self.send("", 204)
         if k in ("text", "on") and v in ("0", "1"):
             scout_save(self.db, k, v)
         elif k == "min" and v.isdigit() and 30 <= int(v) <= 90:
@@ -779,7 +775,7 @@ class Routes:
                   ctype="application/json")
 
     def scout_voice(self):
-        """Settings > Scout > Voices: have the Scout plugin learn a farm Short's voice, or forget one."""
+        """Settings > Scout > Voices: have the Scout plugin learn a farm Short's voice. Voices stay: there is no way to forget or hide one."""
         f = self.form()
         op, v = f.get("op", ""), f.get("v", "").strip()
 
@@ -795,9 +791,6 @@ class Routes:
                 r = scout_call("/learn", {"id": vid}, timeout=180)
                 msg = ("New voice" if r.get("new") else f"Same voice as {r.get('name', '?')}") + \
                       (f" · {len(r.get('channels', []))} channels" if len(r.get("channels", [])) > 1 else "")
-            elif op == "forget" and v:
-                scout_call("/forget", {"name": v}, timeout=60)
-                msg = "Forgotten"
             else:
                 return answer({"error": "?"}, 400)
         except urllib.error.HTTPError as ex:
