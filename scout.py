@@ -570,10 +570,10 @@ def scout_pane(c):
             chans = v["channels"] if isinstance(v.get("channels"), int) else 0
             more = [f'{k} more {w}{"s" if k > 1 else ""}' for k, w in ((2 - chans, "channel"), (2 - v.get("examples", 2), "Short"))
                     if k > 0]                               # red: the first thing missing (a channel brings a Short); green: ready
-            if more:
-                share = f'<span class="tag need" title="The shared list needs 2 channels and 2 Shorts">Needs {more[0]}</span>'
-            elif v.get("channel_names") and all(str(c).lower() in listed for c in v["channel_names"]):
+            if v.get("channel_names") and all(str(c).lower() in listed for c in v["channel_names"]):
                 share = '<span class="tag">Submitted</span>'      # its channels are all on the shared list already
+            elif more:
+                share = f'<span class="tag need" title="The shared list needs 2 channels and 2 Shorts">Needs {more[0]}</span>'
             else:
                 share = ('<span class="tag ready">Ready to submit</span>'
                          f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '

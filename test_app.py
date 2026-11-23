@@ -1373,6 +1373,8 @@ class ScoutTests(unittest.TestCase):
         page = call("/settings")[1]                                                         # all its channels are on the list:
         self.assertIn('<span class="tag">Submitted</span>', page)                           # so it says so, with no Share
         self.assertNotIn('href="/scout/share?name=sent1"', page)
+        scout.SCOUT_LINK["voices"][-1].update(examples=0)                                   # a restored voice has no Shorts counted:
+        self.assertIn('<span class="tag">Submitted</span>', call("/settings")[1])           # still Submitted, not "Needs 1 more Short"
         scout.SCOUT_LINK["voices"].pop()
         code, body = call("/scout/share?name=tbQTA6u4lEM")
         self.assertEqual((code, json.loads(body)["id"]), (200, "tbqta6u4lem"))
