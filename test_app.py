@@ -1173,6 +1173,9 @@ class ScoutTests(unittest.TestCase):
                 if self.path == "/forget":
                     seen.append("forget " + body["name"])
                     return self.answer(200, {"forgot": True})
+                if self.path == "/switch":
+                    seen.append(f'switch {body["name"]} {"on" if body["on"] else "off"}')
+                    return self.answer(200, {"name": body["name"], "on": body["on"]})
                 vid = body["id"]
                 seen.append(vid)
                 self.answer(*looks.get(vid, (200, {"score": 0, "why": []})))
@@ -1354,6 +1357,14 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual(call("/scout/voice", op="learn", v="hello")[0], 400)
         self.assertEqual(call("/scout/voice", op="forget", v="tbQTA6u4lEM")[0], 400)           # voices stay: no forgetting
         self.assertEqual(seen, ["learn AeyLzuVhr1s"])
+        self.assertEqual(call("/scout/voice", op="off", v="tbQTA6u4lEM"), (200, json.dumps({"ok": True, "msg": "Off"})))
+        self.assertEqual(call("/scout/voice", op="on", v="tbQTA6u4lEM")[0], 200)
+        self.assertEqual(seen[1:], ["switch tbQTA6u4lEM off", "switch tbQTA6u4lEM on"])
+        page = call("/settings")[1]                                                         # each voice has an On/Off switch
+        self.assertIn('aria-checked="true" data-voice="tbQTA6u4lEM"', page)
+        scout.SCOUT_LINK["voices"][0]["on"] = False
+        self.assertIn('aria-checked="false" data-voice="tbQTA6u4lEM" aria-label="Use this voice">Off', call("/settings")[1])
+        scout.SCOUT_LINK["voices"][0]["on"] = True
         scout.SCOUT_LINK["voices"].append({"name": "farm-0002", "channels": 2, "channel_names": ["A", "B"], "source": "shared"})
         scout.SCOUT_LINK["lists"] = [{"url": "https://x/voices.json", "count": 2, "fetched": int(time.time()) - 7200, "error": ""}]
         page = call("/settings")[1]
@@ -1476,6 +1487,37 @@ class ScoutTests(unittest.TestCase):
         self.assertEqual([(i["number"], i["verdict"]) for i in r["items"]], [(7, "ok"), (8, "no")])
         f = r["items"][0]["files"][0]
         self.assertEqual((f["same"], f["diff"], f["clues"], f["why"]), (2, 0, 2, ["world-rule opening", "farm description"]))
+        # false alarms: ordinary Shorts with the same voice mean don't merge, whatever else it says
+        heard = lambda ids, near: [{"id": i, "gap": 0.1 if i in near else 0.8} for i in ids]
+        v2 = lambda en, ids=(): dict(verify(en), others=heard(ids, {"ooooooooooo"}))
+        j = scout.scout_judge_entry(e1, v2, text, ["ppppppppppp", "qqqqqqqqqqq"])
+        self.assertEqual((j["verdict"], j["alarms"], j["checked"]), ("ok", 0, 2))
+        j = scout.scout_judge_entry(e1, v2, text, ["ooooooooooo", "ppppppppppp"])
+        self.assertEqual((j["verdict"], j["alarms"], j["checked"]), ("alarm", 1, 2))
+        c = app.connect()                                    # the ordinary Shorts: newest of each subscribed channel
+        c.execute("INSERT INTO profiles(name,color) VALUES('ord','#123456')")
+        pid = c.execute("SELECT id FROM profiles WHERE name='ord'").fetchone()[0]
+        for cid, title in (("UCord000000000000000000a", "Cooking"), ("UCord000000000000000000b", "A"),
+                           ("UCord000000000000000000c", "Bad Farm"), ("UCord000000000000000000d", "Nope")):
+            c.execute("INSERT OR IGNORE INTO channels(id,title) VALUES(?,?)", (cid, title))
+            if title != "Nope":
+                c.execute("INSERT INTO subs(profile_id,channel_id) VALUES(?,?)", (pid, cid))
+        c.executemany("INSERT INTO videos(id,channel_id,channel_title,short,published) VALUES(?,?,?,1,?)",
+                      [("ord00000001", "UCord000000000000000000a", "Cooking", 5), ("ord00000002", "UCord000000000000000000a", "Cooking", 9),
+                       ("ord00000003", "UCord000000000000000000b", "A", 7), ("ord00000004", "UCord000000000000000000c", "Bad Farm", 8),
+                       ("ord00000005", "UCord000000000000000000d", "Nope", 9)])
+        c.execute("INSERT INTO scout_chan(key,name,kind,at) VALUES('bad farm','Bad Farm','farm',0)")
+        self.assertEqual(scout.scout_ordinary(c), [("ord00000002", "Cooking"), ("ord00000003", "A")])
+        c.close()
+        asked = []
+        v3 = lambda en, ids=(): asked.append(list(ids)) or dict(verify(en), others=heard(ids, {"ord00000002"}))
+        r = scout.scout_review(lambda u: pages[u], v3, text)                                 # none from the voice's own channel A
+        self.assertEqual(asked, [["ord00000002"], ["ord00000002"]])
+        self.assertEqual([(i["number"], i["verdict"]) for i in r["items"]], [(7, "alarm"), (8, "no")])
+        scout.SCOUT_CFG["review"] = "1"                                                     # (the maintainer's view)
+        self.assertIn("false alarms 1/1", scout.scout_pane(app.connect()))
+        self.assertIn("ordinary Shorts have this voice too", scout.scout_pane(app.connect()))
+        scout.scout_review(lambda u: pages[u], lambda en, ids=(): dict(verify(en), others=heard(ids, set())), text)   # no alarms now
         # same voice but no farm clues: look at the channels; nothing heard: wait
         self.assertEqual(scout.scout_judge_entry(e1, verify, lambda v: {"score": 0})["verdict"], "look")
         self.assertEqual(scout.scout_judge_entry(e1, lambda en: {"examples": []}, text)["verdict"], "wait")

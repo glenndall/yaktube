@@ -418,17 +418,20 @@ def scout_sync_open(get=None, now=None):
     SCOUT_REVIEW["items"] = items
 
 
-def scout_judge_entry(entry, verify=None, text=None):
-    """Both checks on one submitted voice, and a plain verdict:
-    ok (looks good to merge), look (same voice but few farm clues: look at the channels), no (don't merge),
-    wait (the voice couldn't be checked)."""
-    verify = verify or (lambda en: scout_call("/verify", {"entry": en}, timeout=300))
+def scout_judge_entry(entry, verify=None, text=None, others=()):
+    """The checks on one submitted voice, and a plain verdict: ok (looks good to merge), look (same voice but few
+    farm clues: look at the channels), no (don't merge: a different voice in its examples), alarm (don't merge:
+    ordinary Shorts, `others`, have the voice too), wait (the voice couldn't be checked)."""
+    verify = verify or (lambda en, ids=(): scout_call("/verify", {"entry": en, "others": list(ids)}, timeout=300))
     text = text or scout_check
     try:
-        heard = verify(entry).get("examples", [])
+        r = verify(entry, others) if others else verify(entry)
+        heard, ordinary = r.get("examples", []), r.get("others", []) if others else []
     except Exception:
-        heard = []
+        heard, ordinary = [], []
     limit = 0.25
+    gaps = [x["gap"] for x in ordinary if isinstance(x, dict) and isinstance(x.get("gap"), (int, float))]
+    alarms = sum(1 for g in gaps if g <= limit)
     same = sum(1 for x in heard if isinstance(x.get("gap"), (int, float)) and x["gap"] <= limit)
     diff = sum(1 for x in heard if isinstance(x.get("gap"), (int, float)) and x["gap"] > limit)
     examples = [x for x in entry.get("examples", []) if isinstance(x, str) and yak.VID_RE.fullmatch(x)][:10]
@@ -444,6 +447,8 @@ def scout_judge_entry(entry, verify=None, text=None):
                 why[w] = why.get(w, 0) + 1
     if diff:
         verdict = "no"
+    elif alarms:
+        verdict = "alarm"
     elif not same:
         verdict = "wait"
     elif clues * 2 >= max(1, len(examples)):
@@ -452,18 +457,42 @@ def scout_judge_entry(entry, verify=None, text=None):
         verdict = "look"
     return {"id": str(entry.get("id", "?"))[:40], "channels": [str(c) for c in entry.get("channels", [])][:20],
             "verdict": verdict, "same": same, "diff": diff, "heard": len(heard), "examples": len(examples),
-            "clues": clues, "why": [w for w, _ in sorted(why.items(), key=lambda x: -x[1])][:3]}
+            "clues": clues, "why": [w for w, _ in sorted(why.items(), key=lambda x: -x[1])][:3],
+            "alarms": alarms, "checked": len(gaps)}
+
+
+def scout_ordinary(c, n=12):
+    """Shorts that surely aren't from a farm, to test a submitted voice against: the newest Short of each channel you
+    subscribe to (none Scout dropped, none from a farm channel). [(id, channel title)]."""
+    farms = {r[0] for r in c.execute("SELECT key FROM scout_chan WHERE kind='farm'")}
+    rows = c.execute("SELECT v.id, v.channel_id, v.channel_title FROM videos v WHERE v.short=1 AND v.channel_id IN "
+                     "(SELECT channel_id FROM subs) AND v.id NOT IN (SELECT video_id FROM scout WHERE farm=1) "
+                     "ORDER BY v.published DESC LIMIT 500").fetchall()
+    out, seen = [], set()
+    for vid, cid, title in rows:
+        if cid not in seen and (title or "").lower() not in farms:
+            seen.add(cid)
+            out.append((vid, title or ""))
+    return out[:n]
 
 
 def scout_review(get=gh_get, verify=None, text=None):
     """Check every open submission (Settings > Scout > Submissions > Check)."""
     try:
         subs = scout_submissions(get)
+        c = yak.connect()
+        try:
+            pool = scout_ordinary(c)
+        finally:
+            c.close()
+        def others(entry):                               # 5 ordinary Shorts, none from the voice's own channels
+            mine = {str(x).lower() for x in entry.get("channels", [])}
+            return [vid for vid, title in pool if title.lower() not in mine][:5]
         items = []
         for sub in subs:
-            judged = [scout_judge_entry(f["entry"], verify, text) if "entry" in f and isinstance(f["entry"], dict)
+            judged = [scout_judge_entry(f["entry"], verify, text, others(f["entry"])) if "entry" in f and isinstance(f["entry"], dict)
                       else {"id": f["name"], "verdict": "wait", "error": f.get("error", "not a voice file")} for f in sub["files"]]
-            order = ["no", "wait", "look", "ok"]
+            order = ["no", "alarm", "wait", "look", "ok"]
             items.append(dict(sub, files=judged,
                               verdict=min((j["verdict"] for j in judged), key=order.index) if judged else "none"))
         SCOUT_REVIEW.update(at=int(time.time()), error="", items=items, synced=int(time.time()), sync_ok=True)
@@ -474,6 +503,7 @@ def scout_review(get=gh_get, verify=None, text=None):
 
 SCOUT_VERDICT = {"unchecked": "Not checked yet: press Check", "ok": "✅ Looks good to merge", "look": "⚠️ Same voice, few farm clues: check the channels",
                  "no": "❌ Don't merge: a different voice in its examples", "wait": "⏸ Couldn't check the voice yet",
+                 "alarm": "❌ Don't merge: ordinary Shorts have this voice too",
                  "none": "No voice files in it"}
 
 
@@ -564,6 +594,10 @@ def scout_pane(c):
     listed = {str(c).lower() for v in voices if v.get("source") == "shared" for c in v.get("channel_names", [])}
     def vbtn(v):
         q = urllib.parse.quote(str(v.get("name", "")))
+        on = v.get("on", True) is not False                  # an older plugin doesn't say: on
+        sw = (f'<button type="button" class="btn ghost small sw{" on" if on else ""}" role="switch" aria-checked='
+              f'"{"true" if on else "false"}" data-voice="{yak.e(str(v.get("name", "")))}" aria-label="Use this voice">'
+              f'{"On" if on else "Off"}<i></i></button>')
         share = ""
         if v.get("source") != "shared":                   # the shared list wants 2+ channels and 2+ Shorts: shown always
             # (an older Scout that doesn't count Shorts is judged on channels alone)
@@ -578,7 +612,7 @@ def scout_pane(c):
                 share = ('<span class="tag ready">Ready to submit</span>'
                          f'<a class="btn ghost small" href="/scout/share?name={q}" download data-submit="/scout/submit?name={q}" '
                          'title="Send it to the shared voice list">Share</a>')
-        return share
+        return share + sw
     vlist = "".join(item(f'{v.get("name", "")} {vsub(v)} {v.get("source", "")}', yak.e(str(v.get("name", "?"))),
                          f'<span class="tag">{"Shared" if v.get("source") == "shared" else "Learned"}</span>{yak.e(vsub(v))}',
                          vbtn(v)) for v in voices)
@@ -594,7 +628,8 @@ def scout_pane(c):
         if f.get("error"):
             return f'{yak.e(f["id"])}: {yak.e(f["error"])}'
         bits = [f'voice {f["same"]}/{f["examples"]} same' + (f', {f["diff"]} different' if f["diff"] else ""),
-                f'farm clues {f["clues"]}/{f["examples"]}' + (f' ({", ".join(f["why"])})' if f["why"] else "")]
+                f'farm clues {f["clues"]}/{f["examples"]}' + (f' ({", ".join(f["why"])})' if f["why"] else "")] + \
+               ([f'false alarms {f["alarms"]}/{f["checked"]}'] if f.get("checked") else [])
         return f'{yak.e(f["id"])} · ' + " · ".join(yak.e(b) for b in bits)
     subs = "".join(
         f'<div class="item sub" data-q="{yak.e((it["title"] + " " + it["user"]).lower())}"><div><span class="t">'
@@ -687,6 +722,9 @@ p.addEventListener("click",function(ev){var a=ev.target.closest("a[data-submit]"
     s.textContent="Back";b.closest(".item").classList.add("back");b.replaceWith(s)}
   else if(b.dataset.rm){var d=b.closest("details");post("/scout/channel","op=remove&kind="+b.dataset.rm+"&v="+encodeURIComponent(b.dataset.name));
     b.closest(".item").remove();count(d)}
+  else if(b.dataset.voice){var vo=!b.classList.contains("on");b.classList.toggle("on",vo);b.setAttribute("aria-checked",vo);
+    b.firstChild.nodeValue=vo?"On":"Off";post("/scout/voice","op="+(vo?"on":"off")+"&v="+encodeURIComponent(b.dataset.voice))
+    .then(function(r){if(!r.ok){b.classList.toggle("on",!vo);b.setAttribute("aria-checked",!vo);b.firstChild.nodeValue=vo?"Off":"On"}})}
   else if(b.hasAttribute("data-review")){var rm2=b.nextElementSibling;b.disabled=true;rm2.className="msg";
     rm2.textContent="Checking… (about 10 seconds a Short)";post("/scout/review","").then(function(r){return r.json()})
     .then(function(j){if(j.error){b.disabled=false;rm2.className="msg bad";rm2.textContent=j.error;return}
@@ -775,7 +813,8 @@ class Routes:
                   ctype="application/json")
 
     def scout_voice(self):
-        """Settings > Scout > Voices: have the Scout plugin learn a farm Short's voice. Voices stay: there is no way to forget or hide one."""
+        """Settings > Scout > Voices: have the Scout plugin learn a farm Short's voice, or switch one on or off.
+        Voices stay listed: none can be forgotten."""
         f = self.form()
         op, v = f.get("op", ""), f.get("v", "").strip()
 
@@ -791,6 +830,9 @@ class Routes:
                 r = scout_call("/learn", {"id": vid}, timeout=180)
                 msg = ("New voice" if r.get("new") else f"Same voice as {r.get('name', '?')}") + \
                       (f" · {len(r.get('channels', []))} channels" if len(r.get("channels", [])) > 1 else "")
+            elif op in ("on", "off") and v:                  # a voice on or off here (an off one judges nothing)
+                scout_call("/switch", {"name": v, "on": op == "on"}, timeout=30)
+                msg = "On" if op == "on" else "Off"
             else:
                 return answer({"error": "?"}, 400)
         except urllib.error.HTTPError as ex:
